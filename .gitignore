@@ -1,0 +1,21 @@
+# Streamlit Cloud
+__pycache__/
+*.pyc
+
+# Secrets / credentials
+engine/config.json
+engine/.xhs_cookies.json
+
+# Outputs (generated at runtime)
+outputs/
+raw/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
