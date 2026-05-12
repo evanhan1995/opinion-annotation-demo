@@ -6,16 +6,19 @@
 """
 
 import json
+import re
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 # 路径设置（确保能 import engine 模块）
 PROJECT_DIR = Path(__file__).resolve().parent
 ENGINE_DIR = PROJECT_DIR / "engine"
+OUTPUT_DIR = PROJECT_DIR / "outputs"
 sys.path.insert(0, str(PROJECT_DIR))
 
 import streamlit as st
-from engine.scraper import scrape, SCRAPERS, _detect_platform
+from engine.scraper import scrape, SCRAPERS, _detect_platform, _extract_content_id, PLATFORM_ABBREV
 from engine.annotate import (
     build_system_prompt,
     load_config,
@@ -23,6 +26,7 @@ from engine.annotate import (
     annotate_one,
 )
 from engine.correction_handler import handle_correction
+from engine.ingestor import ingest
 
 # Startup sanity check: verify all scrapers importable
 _supported = list(SCRAPERS.keys())
@@ -52,6 +56,7 @@ for key, default in [
     ("scraped_data", None),
     ("annotation_result", None),
     ("correction_result", None),
+    ("ingest_result", None),
     ("system_prompt_loaded", False),
     ("kb_stats", None),
     ("config", None),
@@ -146,10 +151,78 @@ def load_demo():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Wiki 浏览器辅助函数
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _parse_frontmatter(content: str) -> dict:
+    """Parse YAML frontmatter from markdown content. Returns at minimum {title, type, _body}."""
+    meta = {"title": "", "type": ""}
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            for line in parts[1].strip().split("\n"):
+                if ":" in line:
+                    key, _, val = line.partition(":")
+                    key = key.strip()
+                    val = val.strip()
+                    if key in ("title", "type", "severity", "action", "confidence", "created", "updated"):
+                        meta[key] = val
+            meta["_body"] = parts[2]
+    if "_body" not in meta:
+        meta["_body"] = content
+    return meta
+
+
+def _load_wiki_pages() -> list[dict]:
+    """Scan wiki/ directory and load metadata for all .md pages.
+
+    Returns list of dicts: {path, dir, title, type, filename, content}
+    Sorted: cases numerically, others alphabetically.
+    """
+    pages = []
+    wiki_dir = PROJECT_DIR / "wiki"
+    dir_order = ["concepts", "entities", "sources", "syntheses", "cases"]
+
+    for dirname in dir_order:
+        dir_path = wiki_dir / dirname
+        if not dir_path.exists():
+            continue
+        files = sorted(dir_path.glob("*.md"))
+        # Exclude index.md files, handle separately
+        for f in files:
+            if f.name == "index.md":
+                continue
+            try:
+                text = f.read_text(encoding="utf-8")
+                meta = _parse_frontmatter(text)
+                pages.append({
+                    "path": f"{dirname}/{f.name}",
+                    "dir": dirname,
+                    "title": meta.get("title", f.stem),
+                    "type": meta.get("type", dirname),
+                    "filename": f.name,
+                    "content": meta.get("_body", text),
+                })
+            except Exception:
+                continue
+
+    return pages
+
+
+def _convert_wikilinks(text: str) -> str:
+    """Convert [[path|display]] wikilinks to [display](path) for Streamlit rendering."""
+    def _replace_wl(m):
+        target = m.group(1)
+        display = m.group(2) if m.group(2) else target.split("/")[-1]
+        return f"[{display}]({target})"
+    return re.sub(r'\[\[([^\]|]+)(?:\|([^\]|]+))?\]\]', _replace_wl, text)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 主区域：输入
 # ═══════════════════════════════════════════════════════════════════════════════
 
-tab1, tab2 = st.tabs(["📝 手动输入", "🔗 URL 抓取"])
+tab1, tab2, tab3 = st.tabs(["📝 手动输入", "🔗 URL 抓取", "📚 知识库"])
 
 with tab1:
     # Demo button
@@ -202,8 +275,111 @@ with tab2:
                                          disabled=not bool(url_input.strip()))
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Tab 3: 知识库浏览器
+# ═══════════════════════════════════════════════════════════════════════════════
+
+with tab3:
+    st.subheader("📚 知识库浏览器")
+
+    pages = _load_wiki_pages()
+
+    col_nav, col_content = st.columns([1, 3])
+
+    with col_nav:
+        st.caption("按类型浏览")
+
+        type_labels = {
+            "concepts": ("🔬 Concepts", True),
+            "entities": ("🏢 Entities", True),
+            "sources": ("📄 Sources", True),
+            "syntheses": ("🔗 Syntheses", True),
+            "cases": ("📋 Cases", True),
+        }
+
+        for dirname, (label, default_expanded) in type_labels.items():
+            group = [p for p in pages if p["dir"] == dirname]
+            if not group:
+                continue
+            with st.expander(f"{label} ({len(group)})", expanded=default_expanded):
+                for p in group:
+                    is_selected = st.session_state.get("_selected_page") == p["path"]
+                    btn_label = f"> {p['title'][:35]}" if not is_selected else f"**>> {p['title'][:35]}**"
+                    if st.button(
+                        btn_label,
+                        key=f"nav_{p['path']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state._selected_page = p["path"]
+                        st.rerun()
+
+        st.divider()
+        st.caption("📜 操作日志")
+        if st.button("🔄 刷新", use_container_width=True, key="refresh_wiki"):
+            st.rerun()
+
+    with col_content:
+        selected = st.session_state.get("_selected_page")
+        page_paths = {p["path"]: p for p in pages}
+
+        if selected and selected in page_paths:
+            page_data = page_paths[selected]
+            md_content = _convert_wikilinks(page_data["content"])
+            st.markdown(md_content)
+        else:
+            st.info("👈 从左侧选择一个页面来浏览")
+            log_path = PROJECT_DIR / "wiki" / "log.md"
+            if log_path.exists():
+                log_lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+                last_20 = log_lines[-20:] if len(log_lines) > 20 else log_lines
+                st.markdown("### 📜 最近操作日志")
+                st.code("\n".join(last_20), language="markdown")
+            else:
+                st.info("日志文件尚未创建。")
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 抓取逻辑
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _save_annotation_output(
+    scraped_data: dict,
+    annotation_result: dict,
+    url: str = "",
+) -> str | None:
+    """Save annotation result to outputs/YYYY-MM-DD_platform_id_annotation.json."""
+    platform = scraped_data.get("来源平台", "未知")
+    today = date.today().isoformat()
+    content_id = _extract_content_id(url, platform) if url else "manual"
+    abbrev = PLATFORM_ABBREV.get(platform, "web")
+    filename = f"{today}_{abbrev}_{content_id}_annotation.json"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = OUTPUT_DIR / filename
+    payload = {
+        "scraped_data": scraped_data,
+        "annotation_result": annotation_result,
+        "ingested_at": datetime.now().isoformat(),
+    }
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return filename
+    except OSError:
+        return None
+
+
+def _do_ingest(scraped_data: dict, annotation_result: dict, url: str = "") -> dict:
+    """Exception-safe wrapper for ingestor.ingest()."""
+    try:
+        return ingest(scraped_data, annotation_result, url)
+    except Exception as e:
+        return {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
+
+
+def _clear_correction_widgets():
+    """Remove stale correction widget state so new annotation values take effect."""
+    for key in list(st.session_state.keys()):
+        if key.startswith("corr_"):
+            del st.session_state[key]
+
 
 def do_scrape(url: str):
     with st.spinner(f"正在抓取 {url[:60]}..."):
@@ -211,6 +387,7 @@ def do_scrape(url: str):
         st.session_state.scraped_data = data
         st.session_state.annotation_result = None
         st.session_state.correction_result = None
+        _clear_correction_widgets()
     return data
 
 if scrape_btn and url_input.strip():
@@ -226,6 +403,10 @@ if annotate_scraped_btn and url_input.strip():
             result = annotate_one(user_msg, system_prompt, config)
             st.session_state.annotation_result = result
             st.session_state.correction_result = None
+            _clear_correction_widgets()
+            if result and not result.get("error"):
+                _save_annotation_output(data, result, url_input.strip())
+                st.session_state.ingest_result = _do_ingest(data, result, url_input.strip())
 
 # 手动标注
 if manual_annotate_btn and manual_content.strip():
@@ -253,6 +434,10 @@ if manual_annotate_btn and manual_content.strip():
         result = annotate_one(user_msg, system_prompt, config)
         st.session_state.annotation_result = result
         st.session_state.correction_result = None
+        _clear_correction_widgets()
+        if result and not result.get("error"):
+            _save_annotation_output(item, result)
+            st.session_state.ingest_result = _do_ingest(item, result)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 抓取结果预览
@@ -498,6 +683,24 @@ if result:
                 st.markdown("**检测到的差异：**")
                 for field, vals in cr["diffs"].items():
                     st.markdown(f"- {field}: `{vals['ai']}` → `{vals['human']}`")
+
+    # Ingest 结果反馈
+    if st.session_state.ingest_result:
+        ir = st.session_state.ingest_result
+        if ir["action"] == "case_generated":
+            st.success(f"知识库已自动更新: {ir['case_file']}")
+            bc = ir.get("boundary_check", {})
+            flags = []
+            if bc.get("p1_uncovered"):
+                flags.append("P1 覆盖盲区已填补")
+            if bc.get("unusual_combo"):
+                flags.append("异常严重度-分流组合")
+            if bc.get("new_platform"):
+                flags.append("新平台覆盖")
+            if flags:
+                st.info(f"边界提醒: {'; '.join(flags)}")
+        elif ir["action"] == "skipped":
+            st.caption(f"知识库: 已有案例 {ir['case_file']}，跳过自动 Ingest。")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 页脚
