@@ -11,13 +11,78 @@
 import json
 import re
 import sys
-from datetime import datetime
+import hashlib
+from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import urlparse
 
 # Windows terminal UTF-8 adaptation
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
+
+ENGINE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = ENGINE_DIR.parent
+RAW_CASES_DIR = PROJECT_DIR / "raw" / "cases"
+
+PLATFORM_ABBREV = {
+    "小红书": "xhs",
+    "YouTube": "ytb",
+    "X": "x",
+    "X (Twitter)": "x",
+    "Reddit": "reddit",
+    "Instagram": "ig",
+    "TikTok": "tt",
+    "通用网页": "web",
+    "新闻媒体": "news",
+    "论坛": "forum",
+    "其他": "other",
+}
+
+
+def _extract_content_id(url: str, platform: str) -> str:
+    """Extract stable content ID from URL for file naming. Falls back to MD5 hash."""
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    path_parts = path.split("/")
+
+    if platform == "小红书":
+        return path_parts[-1] if path_parts else hashlib.md5(url.encode()).hexdigest()[:8]
+
+    if platform == "YouTube":
+        from urllib.parse import parse_qs
+        params = parse_qs(parsed.query)
+        video_id = params.get("v", [None])[0]
+        if video_id:
+            return video_id
+        if "youtu.be" in parsed.netloc:
+            return path.lstrip("/").split("?")[0]
+        return hashlib.md5(url.encode()).hexdigest()[:8]
+
+    if platform in ("X", "X (Twitter)"):
+        return path_parts[-1] if len(path_parts) >= 2 else hashlib.md5(url.encode()).hexdigest()[:8]
+
+    if platform == "Reddit" and "comments" in path_parts:
+        idx = path_parts.index("comments")
+        if idx + 1 < len(path_parts):
+            return path_parts[idx + 1]
+
+    return hashlib.md5(url.encode()).hexdigest()[:8]
+
+
+def _write_raw_cases(data: dict, url: str, platform: str) -> str | None:
+    """Write scraped data to raw/cases/YYYY-MM-DD_{platform}_{id}.json. Returns filename or None."""
+    today = date.today().isoformat()
+    content_id = _extract_content_id(url, platform)
+    abbrev = PLATFORM_ABBREV.get(platform, "web")
+    filename = f"{today}_{abbrev}_{content_id}.json"
+    RAW_CASES_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = RAW_CASES_DIR / filename
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return filename
+    except OSError:
+        return None
 
 
 def _detect_platform(url: str) -> str:
@@ -324,6 +389,7 @@ def scrape(url: str, timeout: int = 30000) -> dict:
     try:
         result = scraper(url, timeout)
         result["来源平台"] = platform
+        _write_raw_cases(result, url, platform)
         return result
     except Exception as e:
         return {
