@@ -5,6 +5,7 @@ created: 2026-05-12
 severity: P2
 action: 立即处理
 platform: 小红书
+url: https://www.xiaohongshu.com/explore/69ef60d9000000001f00218a?xsec_token=ABzXNXkFByKYtnEdOQhDjTn9-s2sPbkvvPY9CZpCRHdVk=&xsec_source=pc_search&source=web_explore_feed
 source: human_correction
 original_ai_output:
   severity: P2

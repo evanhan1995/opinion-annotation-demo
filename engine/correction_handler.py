@@ -121,6 +121,7 @@ def generate_case(
     for field, vals in diffs.items():
         diff_lines.append(f"- **{field}**：AI 判为「{_format_value(vals['ai'])}」→ 人工修正为「{_format_value(vals['human'])}」")
 
+    url_line = f"url: {url}" if url else ""
     content = f"""---
 title: 案例{case_id.split('-')[1]}: {title_text}
 type: case
@@ -129,6 +130,7 @@ severity: {severity}
 action: {action}
 platform: {platform}
 source: human_correction
+{url_line}
 original_ai_output:
   severity: {ai_output.get('严重度评级', '?')}
   action: {ai_output.get('分流建议', '?')}
@@ -177,36 +179,25 @@ tags: [纠偏案例, {severity}]
 
 
 def update_case_index(new_filename: str, human_correction: dict) -> None:
-    """更新 wiki/cases/index.md，添加新案例到总览表。"""
-    if not INDEX_PATH.exists():
-        return
+    """更新 wiki/cases/index.md，添加新案例到总览表和维度索引。
 
-    case_id = new_filename.replace(".md", "")
-    case_num = case_id.split("-")[1]
+    Delegates to engine.index_mgr (shared with ingestor).
+    """
+    from engine.index_mgr import update_case_index as do_update
+
     severity = human_correction.get("严重度评级", "?")
     action = human_correction.get("分流建议", "?")
     title = human_correction.get("摘要", "纠偏案例")[:40]
 
-    # 新案例行
-    new_row = f"| [[cases/{case_id}|{case_num}]] | {title} | {severity} | {action} | — | 纠偏案例 | 2026-05-11 |"
-
-    with open(INDEX_PATH, "r", encoding="utf-8") as f:
-        index_content = f.read()
-
-    # 在 P3 case-006 行后插入（在案例总览表中）
-    insert_marker = "| [[cases/case-006|006]]"
-    if insert_marker in index_content:
-        # 找到 case-006 行的结束（下一个空行或 ---）
-        lines = index_content.split("\n")
-        new_lines = []
-        for i, line in enumerate(lines):
-            new_lines.append(line)
-            if insert_marker in line:
-                new_lines.append(new_row)
-        index_content = "\n".join(new_lines)
-
-    with open(INDEX_PATH, "w", encoding="utf-8") as f:
-        f.write(index_content)
+    do_update(
+        new_filename=new_filename,
+        severity=severity,
+        action=action,
+        title=title,
+        platform="—",
+        tags=["纠偏案例"],
+        source="human_correction",
+    )
 
 
 def append_log(case_filename: str, diff_level: str, input_url: str = "") -> None:

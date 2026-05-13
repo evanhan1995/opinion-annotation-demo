@@ -20,6 +20,8 @@ CASES_DIR = WIKI_DIR / "cases"
 INDEX_PATH = CASES_DIR / "index.md"
 GLOBAL_INDEX_PATH = WIKI_DIR / "index.md"
 LOG_PATH = WIKI_DIR / "log.md"
+RAW_CASES_DIR = PROJECT_DIR / "raw" / "cases"
+RAW_ARCHIVE_DIR = PROJECT_DIR / "raw" / "archive"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -48,9 +50,10 @@ def ingest(
 
     boundary = _check_boundaries(annotation_result)
     case_file = _generate_auto_case(scraped_data, annotation_result, url)
-    _update_case_index(case_file, annotation_result)
+    _update_case_index(case_file, annotation_result, scraped_data)
     _update_global_index(case_file, annotation_result)
     _append_ingest_log(case_file, annotation_result, url)
+    _archive_raw_file(url)
 
     return {
         "action": "case_generated",
@@ -60,17 +63,41 @@ def ingest(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Dedup
+# Dedup & Archive
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _archive_raw_file(url: str) -> None:
+    """Move raw case files matching URL from raw/cases/ to raw/archive/."""
+    if not url or not RAW_CASES_DIR.exists():
+        return
+    for f in RAW_CASES_DIR.glob("*.json"):
+        try:
+            content = f.read_text(encoding="utf-8")
+            if url in content:
+                RAW_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+                dest = RAW_ARCHIVE_DIR / f.name
+                f.rename(dest)
+                return
+        except Exception:
+            continue
+
 def _find_existing_case_by_url(url: str) -> str | None:
-    """Scan existing case files for the URL. Returns filename or None."""
+    """Scan case frontmatter for matching URL. Returns filename or None.
+
+    Only reads the YAML frontmatter block (between --- delimiters) of each
+    case file, not the full file body.  O(N) in number of cases, constant per file.
+    """
     if not url or not CASES_DIR.exists():
         return None
     for f in sorted(CASES_DIR.glob("case-*.md")):
-        content = f.read_text(encoding="utf-8")
-        if url in content:
-            return f.name
+        text = f.read_text(encoding="utf-8")
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            fm = parts[1]
+            for line in fm.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("url:") and url in stripped:
+                    return f.name
     return None
 
 
@@ -160,6 +187,7 @@ def _generate_auto_case(
     if not boundary_lines:
         boundary_lines.append("- 此案例落在现有规则覆盖范围内，无明显边界异常。")
 
+    url_line = f"url: {url}" if url else ""
     content = f"""---
 title: 案例{case_id.split('-')[1]}: {title_text}
 type: case
@@ -168,6 +196,7 @@ severity: {severity}
 action: {action}
 platform: {platform}
 source: auto_ingest
+{url_line}
 tags: [auto_ingest, {severity}]
 ---
 
@@ -216,79 +245,28 @@ tags: [auto_ingest, {severity}]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Index update: wiki/cases/index.md
+# Index update: delegates to engine.index_mgr (shared with correction_handler)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _update_case_index(new_filename: str, annotation_result: dict) -> None:
-    """Add new case row to wiki/cases/index.md table + dimension indexes."""
-    if not INDEX_PATH.exists():
-        return
+def _update_case_index(new_filename: str, annotation_result: dict, scraped_data: dict = None) -> None:
+    """Add new case row to wiki/cases/index.md. Delegates to index_mgr."""
+    from engine.index_mgr import update_case_index
 
-    case_id = new_filename.replace(".md", "")
-    case_num = case_id.split("-")[1]
     severity = annotation_result.get("严重度评级", "?")
     action = annotation_result.get("分流建议", "?")
-    platform = annotation_result.get("来源平台", "?")
+    platform = (scraped_data or {}).get("来源平台", annotation_result.get("来源平台", "?"))
     title = annotation_result.get("摘要", "auto-ingest")[:40]
     tags = annotation_result.get("风险标签", [])
-    tags_str = ", ".join(tags[:3]) if tags else "-"
 
-    new_row = f"| [[cases/{case_id}|{case_num}]] | {title} | {severity} | {action} | {platform} | {tags_str} |"
-
-    with open(INDEX_PATH, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    # Find last case-row in the overview table and append after it
-    last_case_line_idx = -1
-    for i, line in enumerate(lines):
-        if re.match(r'\|\s*\[\[cases/case-\d+\|\d+\]\]', line):
-            last_case_line_idx = i
-
-    new_lines = []
-    for i, line in enumerate(lines):
-        new_lines.append(line.rstrip())
-        if i == last_case_line_idx:
-            new_lines.append(new_row)
-
-    # Update dimension indexes: append case ref under matching severity/platform rows
-    case_ref = f"[[cases/{case_id}|{case_num}]]"
-    section = None
-
-    for i, line in enumerate(new_lines):
-        s = line.strip()
-        if s.startswith("### 按严重度"):
-            section = "severity"
-        elif s.startswith("### 按分流建议"):
-            section = "action"
-        elif s.startswith("### 按平台"):
-            section = "platform"
-        elif s.startswith("## "):
-            section = None
-
-        if section == "severity" and line.strip().startswith(f"| {severity} |"):
-            if case_ref not in line:
-                parts = line.split("|")
-                if len(parts) >= 3:
-                    existing = parts[2].strip()
-                    if existing in ("—", "-", "（**待添加**）"):
-                        parts[2] = f" {case_ref}"
-                    else:
-                        parts[2] = existing + f", {case_ref}"
-                    new_lines[i] = "|".join(parts)
-
-        if section == "platform" and line.strip().startswith(f"| {platform} |"):
-            if case_ref not in line:
-                parts = line.split("|")
-                if len(parts) >= 3:
-                    existing = parts[2].strip()
-                    if existing in ("—", "-", "（**待添加**）"):
-                        parts[2] = f" {case_ref}"
-                    else:
-                        parts[2] = existing + f", {case_ref}"
-                    new_lines[i] = "|".join(parts)
-
-    with open(INDEX_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(new_lines))
+    update_case_index(
+        new_filename=new_filename,
+        severity=severity,
+        action=action,
+        title=title,
+        platform=platform,
+        tags=tags,
+        source="auto_ingest",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
