@@ -4,5 +4,6 @@
   "model": "deepseek-chat",
   "api_base": "https://api.deepseek.com",
   "max_tokens": 4096,
-  "temperature": 0.1
+  "temperature": 0.1,
+  "kb_password": ""
 }

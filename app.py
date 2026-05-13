@@ -63,6 +63,7 @@ for key, default in [
     ("kb_stats", None),
     ("config", None),
     ("demo_guide_shown", False),
+    ("kb_authenticated", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -660,6 +661,31 @@ with tab2:
 # Tab 3: 知识库浏览器
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _get_kb_password() -> str:
+    """Read knowledge base password from config or env var (never from source code)."""
+    import os
+    pw = os.getenv("KB_PASSWORD", "")
+    if pw:
+        return pw
+    try:
+        config = load_config()
+        return config.get("kb_password", "")
+    except Exception:
+        return ""
+
+
+def _kb_password_form():
+    """Render a compact password input that unlocks the knowledge base."""
+    pw = st.text_input("知识库密码", type="password", placeholder="输入密码查看内容",
+                       key="kb_pw_input")
+    if st.button("解锁知识库", key="kb_unlock_btn", use_container_width=True):
+        if pw == _get_kb_password():
+            st.session_state.kb_authenticated = True
+            st.rerun()
+        else:
+            st.error("密码错误，请重试")
+
+
 with tab3:
     st.subheader("📚 知识库浏览器")
 
@@ -695,28 +721,50 @@ with tab3:
                         st.rerun()
 
         st.divider()
+        # Logs are also protected
         st.caption("📜 操作日志")
         if st.button("🔄 刷新", use_container_width=True, key="refresh_wiki"):
             st.rerun()
 
     with col_content:
-        selected = st.session_state.get("_selected_page")
-        page_paths = {p["path"]: p for p in pages}
-
-        if selected and selected in page_paths:
-            page_data = page_paths[selected]
-            md_content = _convert_wikilinks(page_data["content"])
-            st.markdown(md_content)
-        else:
-            st.info("👈 从左侧选择一个页面来浏览")
-            log_path = PROJECT_DIR / "wiki" / "log.md"
-            if log_path.exists():
-                log_lines = log_path.read_text(encoding="utf-8").strip().split("\n")
-                last_20 = log_lines[-20:] if len(log_lines) > 20 else log_lines
+        # --- Password gate ---
+        has_password = bool(_get_kb_password())
+        if has_password and not st.session_state.kb_authenticated:
+            st.info("🔒 知识库内容受密码保护。请在下方输入密码解锁。")
+            _kb_password_form()
+            # Show log only on default view, protected
+            selected = st.session_state.get("_selected_page")
+            if not selected:
                 st.markdown("### 📜 最近操作日志")
-                st.code("\n".join(last_20), language="markdown")
+                st.caption("(输入密码后可查看完整内容)")
+        else:
+            selected = st.session_state.get("_selected_page")
+            page_paths = {p["path"]: p for p in pages}
+
+            if selected and selected in page_paths:
+                page_data = page_paths[selected]
+                md_content = _convert_wikilinks(page_data["content"])
+                st.markdown(md_content)
+                # Lock button to re-lock when leaving
+                if has_password:
+                    st.divider()
+                    if st.button("🔒 锁定知识库", key="kb_lock_btn"):
+                        st.session_state.kb_authenticated = False
+                        st.rerun()
             else:
-                st.info("日志文件尚未创建。")
+                st.info("👈 从左侧选择一个页面来浏览")
+                log_path = PROJECT_DIR / "wiki" / "log.md"
+                if log_path.exists():
+                    log_lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+                    last_20 = log_lines[-20:] if len(log_lines) > 20 else log_lines
+                    if has_password and st.session_state.kb_authenticated:
+                        st.markdown("### 📜 最近操作日志")
+                        st.code("\n".join(last_20), language="markdown")
+                    elif not has_password:
+                        st.markdown("### 📜 最近操作日志")
+                        st.code("\n".join(last_20), language="markdown")
+                else:
+                    st.info("日志文件尚未创建。")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tab 4: 扫地僧 Agent
