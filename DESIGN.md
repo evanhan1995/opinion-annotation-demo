@@ -1,6 +1,6 @@
 # 舆情标注系统 —— 深化设计方案
 
-> 版本: v0.4 | 日期: 2026-05-13 | 状态: Phase 8 已交付，进入 Phase 9 可观测性+部署阶段
+> 版本: v0.5-pre | 日期: 2026-05-13 | 状态: Phase 10a 已交付（linker.py），可继续推进 Phase 10b-d
 
 ---
 
@@ -33,8 +33,9 @@
 | `engine/agent.py` | 282 | 扫地僧问答引擎 |
 | `engine/correction_handler.py` | 281 | 纠偏差异处理（index 更新委托 index_mgr） |
 | `engine/index_mgr.py` | 136 | 共享 index 更新逻辑 |
+| `engine/linker.py` | 236 | 跨条目关联检测（bigram + 加权评分） |
 | `tests/test_core.py` | 382 | 21 个核心测试 |
-| **总计** | **3,650** | |
+| **总计** | **3,886** | |
 
 ### 1.3 知识库资产
 

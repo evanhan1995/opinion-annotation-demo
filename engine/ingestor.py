@@ -55,10 +55,19 @@ def ingest(
     _append_ingest_log(case_file, annotation_result, url)
     _archive_raw_file(url)
 
+    # Cross-entry linker: detect same-event across platforms
+    linker_result = None
+    try:
+        from engine.linker import auto_link as _auto_link
+        linker_result = _auto_link(case_file)
+    except Exception:
+        pass
+
     return {
         "action": "case_generated",
         "case_file": case_file,
         "boundary_check": boundary,
+        "linker": linker_result or {},
     }
 
 

@@ -1,4 +1,5 @@
 ---
+
 title: 案例009: 6.24万粉手工艺YouTuber指控TEMU盗用其钩针设计，获3649赞，评论区观点分化，部分支持部分质疑版权依据
 type: case
 created: 2026-05-12
@@ -8,6 +9,7 @@ platform: YouTube
 url: https://www.youtube.com/shorts/c5erGGVmYxc
 source: auto_ingest
 tags: [auto_ingest, P2]
+
 ---
 
 ## 原始输入

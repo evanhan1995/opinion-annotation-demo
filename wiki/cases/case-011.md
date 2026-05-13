@@ -1,4 +1,5 @@
 ---
+
 title: 案例011: 小红书用户投诉大疆产品质量差，刚买几天就坏，寄回后商家私自换新不给退款，提及12345介入后处理一个月仍未解决，获2赞6
 type: case
 created: 2026-05-13
@@ -8,6 +9,7 @@ platform: 小红书
 source: auto_ingest
 url: https://www.xiaohongshu.com/explore/6a0316b800000000070214e8?xsec_token=AB0aAQ16zym3D6C5W1Wf-ddw_4BIAfY34AUqkjr6A17xY=&xsec_source=pc_search&source=web_search_result_notes
 tags: [auto_ingest, P2]
+
 ---
 
 ## 原始输入
