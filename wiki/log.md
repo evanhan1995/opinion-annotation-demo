@@ -69,3 +69,69 @@ tags: [log, audit]
 - **差异等级**：minor
 - **来源链接**：https://www.xiaohongshu.com/explore/69fe9f50000000003601c0aa?xsec_token=ABODr5NFOXzdtxjtXYX29o_9cfJfsUzyK2zzXFOgNr6Zs=&xsec_source=pc_search&source=web_search_result_notes
 - **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-12 13:34 | 自动Ingest | 生成 [[cases/case-008]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：KOL负面
+- **来源链接**：https://www.youtube.com/shorts/-VGsjKF27Fg
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-12 13:39 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.youtube.com/shorts/-VGsjKF27Fg
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-12 16:37 | 自动Ingest | 生成 [[cases/case-009]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：合规, KOL负面
+- **来源链接**：https://www.youtube.com/shorts/c5erGGVmYxc
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-12 16:42 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.youtube.com/shorts/c5erGGVmYxc
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-13 10:43 | 自动Ingest | 生成 [[cases/case-011]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：质量, 客服
+- **来源链接**：https://www.xiaohongshu.com/explore/6a0316b800000000070214e8?xsec_token=AB0aAQ16zym3D6C5W1Wf-ddw_4BIAfY34AUqkjr6A17xY=&xsec_source=pc_search&source=web_search_result_notes
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-13 11:03 | 自动Ingest | 生成 [[cases/case-012]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P1
+- **分流建议**：立即处理
+- **风险标签**：安全, 质量, 客服
+- **来源链接**：https://www.xiaohongshu.com/explore/69ff2eea000000001f005fcc?xsec_token=ABsvTnU-6z5kvDrh9pcqF2ZMJS8-BlzDubVIaW2lVKVnE=&xsec_source=pc_search&source=web_search_result_notes
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-13 11:20 | 自动Ingest | 生成 [[cases/case-013]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：质量, KOL负面
+- **来源链接**：https://www.youtube.com/watch?v=tPoD1BA41ik
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-13 11:42 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.youtube.com/watch?v=tPoD1BA41ik
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。

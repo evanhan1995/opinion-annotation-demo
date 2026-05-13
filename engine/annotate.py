@@ -29,21 +29,35 @@ PROJECT_DIR = ENGINE_DIR.parent
 WIKI_DIR = PROJECT_DIR / "wiki"
 CONFIG_PATH = ENGINE_DIR / "config.json"
 
-# 系统提示词组装顺序
-PROMPT_LAYERS = [
+# 系统提示词固定层（案例层由 _get_case_layers() 动态扫描生成）
+_FIXED_PROMPT_LAYERS = [
     ("core",       "syntheses/opinion-annotation-spec.md"),
     ("concept",    "concepts/severity-rating-matrix.md"),
     ("concept",    "concepts/sentiment-analysis-dimensions.md"),
     ("concept",    "concepts/public-opinion-triaging.md"),
     ("concept",    "concepts/content-authenticity-assessment.md"),
     ("concept",    "concepts/platform-adaptation.md"),
-    ("case",       "cases/case-001.md"),
-    ("case",       "cases/case-002.md"),
-    ("case",       "cases/case-003.md"),
-    ("case",       "cases/case-004.md"),
-    ("case",       "cases/case-005.md"),
-    ("case",       "cases/case-006.md"),
 ]
+
+MAX_CASE_LAYERS = 15  # Keep prompt size manageable
+
+
+def _get_case_layers() -> list[tuple[str, str]]:
+    """Scan wiki/cases/ for all case files, newest first."""
+    cases_dir = WIKI_DIR / "cases"
+    if not cases_dir.exists():
+        return []
+    case_files = sorted(
+        cases_dir.glob("case-*.md"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    return [("case", f"cases/{f.name}") for f in case_files[:MAX_CASE_LAYERS]]
+
+
+def _get_prompt_layers() -> list[tuple[str, str]]:
+    """Build prompt layers: fixed concepts + dynamic cases."""
+    return _FIXED_PROMPT_LAYERS + _get_case_layers()
 
 PLATFORM_LIST = [
     "小红书", "YouTube", "Instagram", "TikTok", "X", "X (Twitter)", "Twitter",
@@ -151,7 +165,7 @@ def build_system_prompt() -> tuple[str, dict]:
     layers_content = {}
     stats = {"layers": {}, "total_chars": 0, "total_estimated_tokens": 0}
 
-    for layer_name, rel_path in PROMPT_LAYERS:
+    for layer_name, rel_path in _get_prompt_layers():
         file_path = WIKI_DIR / rel_path
         if not file_path.exists():
             stats["layers"][rel_path] = {"status": "missing", "chars": 0, "tokens": 0}
@@ -205,10 +219,10 @@ def build_system_prompt() -> tuple[str, dict]:
     # 按层级拼接
     core_content = layers_content.get("syntheses/opinion-annotation-spec.md", "")
     concept_pages = "\n\n---\n\n".join(
-        layers_content[r] for _, r in PROMPT_LAYERS if r.startswith("concepts/") and r in layers_content
+        layers_content[r] for _, r in _get_prompt_layers() if r.startswith("concepts/") and r in layers_content
     )
     case_pages = "\n\n---\n\n".join(
-        layers_content[r] for _, r in PROMPT_LAYERS if r.startswith("cases/") and r in layers_content
+        layers_content[r] for _, r in _get_prompt_layers() if r.startswith("cases/") and r in layers_content
     )
 
     full_prompt = f"""{role_instruction}
@@ -385,6 +399,83 @@ def _annotate_anthropic(user_message: str, system_prompt: str, config: dict) -> 
 
     except Exception as e:
         return {"error": True, "message": f"API 错误: {e}"}
+
+
+def annotate_one_stream(user_message: str, system_prompt: str, config: dict):
+    """流式标注生成器。逐 chunk 返回进度，最后返回完整结果。
+
+    Yields:
+        {"type": "progress", "chars": int} — 实时进度
+        {"type": "result", "data": dict}  — 最终结果（含 _meta）
+    """
+    api_key = config.get("api_key", "")
+    if not api_key:
+        yield {"type": "result", "data": {
+            "error": True,
+            "message": "未配置 API Key。请在侧边栏加载知识库或设置环境变量。",
+        }}
+        return
+
+    api_style = config.get("api_style", "openai")
+    if api_style == "anthropic":
+        # Anthropic streaming NYI, fall back to non-streaming
+        result = _annotate_anthropic(user_message, system_prompt, config)
+        yield {"type": "result", "data": result}
+        return
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        yield {"type": "result", "data": {
+            "error": True, "message": "缺少 openai 库。",
+        }}
+        return
+
+    client = OpenAI(api_key=api_key, base_url=config["api_base"])
+
+    try:
+        stream = client.chat.completions.create(
+            model=config["model"],
+            max_tokens=config["max_tokens"],
+            temperature=config["temperature"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            stream=True,
+        )
+
+        accumulated = []
+        char_count = 0
+        last_yield = 0
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                text = chunk.choices[0].delta.content
+                accumulated.append(text)
+                char_count += len(text)
+                # Yield progress every ~100 chars to avoid spamming
+                if char_count - last_yield >= 100:
+                    yield {"type": "progress", "chars": char_count}
+                    last_yield = char_count
+
+        raw_text = "".join(accumulated)
+        json_text = extract_json_from_response(raw_text)
+        result = json.loads(json_text)
+        result["_meta"] = {
+            "model": config["model"],
+            "streamed": True,
+            "output_chars": char_count,
+        }
+        yield {"type": "result", "data": result}
+
+    except json.JSONDecodeError:
+        yield {"type": "result", "data": {
+            "error": True,
+            "message": "API 返回内容无法解析为 JSON",
+            "raw_response": raw_text if 'raw_text' in dir() else "",
+        }}
+    except Exception as e:
+        yield {"type": "result", "data": {"error": True, "message": f"API 错误: {e}"}}
 
 
 def annotate_one(user_message: str, system_prompt: str, config: dict) -> dict:
