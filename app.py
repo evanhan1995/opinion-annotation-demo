@@ -662,11 +662,20 @@ with tab2:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_kb_password() -> str:
-    """Read knowledge base password from config or env var (never from source code)."""
+    """Read knowledge base password from secrets/env/config (never from source code)."""
+    # 1. Streamlit Cloud Secrets
+    try:
+        pw = st.secrets.get("KB_PASSWORD", "")
+        if pw:
+            return pw
+    except Exception:
+        pass
+    # 2. Environment variable
     import os
     pw = os.getenv("KB_PASSWORD", "")
     if pw:
         return pw
+    # 3. Local config.json (gitignored)
     try:
         config = load_config()
         return config.get("kb_password", "")
