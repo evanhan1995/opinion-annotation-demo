@@ -49,22 +49,6 @@ st.set_page_config(
 st.title("舆情智能标注系统")
 st.caption("基于 Wiki 知识库 + LLM 的智能打标与分流判断")
 
-# Demo guide: show once per session
-if "demo_guide_shown" not in st.session_state:
-    st.session_state.demo_guide_shown = False
-if not st.session_state.demo_guide_shown and not st.session_state.annotation_result:
-    with st.expander("👋 快速入门指南", expanded=True):
-        st.markdown("""
-        1. **加载 Demo** → 点击左侧「📝 手动输入」标签页中的「📋 加载 Demo 示例」
-        2. **AI 标注** → 点击「标注」按钮，等待 AI 分析结果
-        3. **查看案例** → 切换到「📚 知识库」标签页，从左侧选择案例查看
-        4. **尝试纠偏** → 在标注结果底部的「纠偏」表单中修改 AI 判断，保存后自动生成校准案例
-        5. **问答检索** → 切换到「💬 扫地僧」标签页，向知识库提问
-        """)
-        if st.button("知道了，开始使用", key="dismiss_guide"):
-            st.session_state.demo_guide_shown = True
-            st.rerun()
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # 初始化 session state
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -78,9 +62,24 @@ for key, default in [
     ("system_prompt_loaded", False),
     ("kb_stats", None),
     ("config", None),
+    ("demo_guide_shown", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+# Demo guide: show once per session
+if not st.session_state.demo_guide_shown and not st.session_state.annotation_result:
+    with st.expander("👋 快速入门指南", expanded=True):
+        st.markdown("""
+        1. **加载 Demo** → 点击左侧「📝 手动输入」标签页中的「📋 加载 Demo 示例」
+        2. **AI 标注** → 点击「标注」按钮，等待 AI 分析结果
+        3. **查看案例** → 切换到「📚 知识库」标签页，从左侧选择案例查看
+        4. **尝试纠偏** → 在标注结果底部的「纠偏」表单中修改 AI 判断，保存后自动生成校准案例
+        5. **问答检索** → 切换到「💬 扫地僧」标签页，向知识库提问
+        """)
+        if st.button("知道了，开始使用", key="dismiss_guide"):
+            st.session_state.demo_guide_shown = True
+            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 侧边栏：系统状态
