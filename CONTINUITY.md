@@ -121,17 +121,14 @@ app.py 标注按钮点击
 8. **yt-dlp 评论上限**：`max_comments=["50"]` 已配置在 scraper.py 中，不要删除此限制。
 9. **系统 prompt 按需构建**：已移除 `cached_system_prompt`。每次标注调用 `build_system_prompt(content)[0]`，按内容相关性选 top-5 案例（10ms 构建，9.8K tokens）。
 
-## 项目当前状态 (v1.0.0)
+## 项目当前状态 (v1.3.0)
 
-中期里程碑 Phase 11a-d 全部完成：
-- **11a**: 批量导入 (checkbox + text_area + 进度条)
-- **11b**: 标注历史回溯 (find_annotation_history + diff + timeline)
-- **11c**: 巡检监控 (monitored_urls.json + 侧边栏按钮)
-- **11d**: P0/P1 醒目告警 (error/warning 横幅)
+所有短期 Phase 完成，项目完整可用。下一阶段：
+- **17a**: app.py 拆分 (半天)
+- **17b**: 测试补盲 (半天)
+- **17c**: XHS Cookie 攻坚 (一天)
 
-远期路线（1-3月）：向量检索、L4多人协作(飞书)、多语言+A/B对比。
-
-详见 `DESIGN.md` 第 2 节路线图。
+详见 `DESIGN.md` 第 2 节路线图和 `WAKEUP.md`。
 
 ---
 
