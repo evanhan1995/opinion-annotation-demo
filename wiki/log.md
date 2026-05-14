@@ -2,7 +2,59 @@
 title: 操作日志
 type: log
 created: 2026-05-11
-updated: 2026-05-14
+updated: 2026-05-15
+---
+
+## 2026-05-15 最终轮次开发日志
+
+### 版本: v1.3.0
+
+#### Phase 16a: 手工录入改造
+- Tab1 从"手动输入+Demo"拆分为纯手工录入
+- 删除 AI 标注按钮，改为全人工填写
+- 必填 URL 字段（知识库溯源）
+- txt 上传→AI 总结→填入简介
+- 删除原文内容/评论区/发布者类型/互动数据（与社媒数据去重）
+- "📋 下一个案例"一键清空表单
+- 简介替代原文内容作为主字段
+
+#### Phase 16b: 操作演示
+- 新增 Tab5「🎬 操作演示」
+- 4 步离线模拟：输入URL→抓取→标注→查看结果
+- 预置 YouTube Demo 数据（China Observer / Temu 调查）
+- 全程 0 API 调用，0 知识库写入
+- 含纠偏表单模拟和重新演示按钮
+
+#### Phase 14: 稳定性增强
+- annotate.py 所有 OpenAI 调用加 timeout=90s
+- txt 上传 API 调用加 timeout=30s
+- Tab 隔离: `_result_source` 非破坏性过滤
+- 输入校验: 内容长度提示、URL 格式检查
+- 幽灵代码清理: 删除 `_pending_annotate_manual`、`manual_annotate_btn` handler、`DEMO_DATA`/`load_demo`
+
+#### Phase 12: UI 细化
+- 侧边栏重组: Dashboard 常驻、系统状态紧凑化、巡检+XHS 合并
+- 5 Tab 架构: 📝手工录入 / 🔗URL抓取 / 📚知识库 / 💬扫地僧 / 🎬操作演示
+- 入门指南更新为 5 Tab 版本
+- 删除重复 Dashboard 块、重复近似舆情、过时 Demo 引用
+
+#### Bug 修复 (本轮)
+- 语法错误: Dashboard 双重 try 块→`SyntaxError: expected 'except'`
+- Tab 跳转: demo `st.rerun()` 改为 `_needs_rerun` gate
+- 演示无结果: Tab1 入口破坏性清理→改为 `_render_annotation_result` 来源过滤
+- Cloud 部署失败: requirements.txt 缺 yt-dlp/httpx/xhshow
+- SSH 推送: HTTPS 被网络拦截→生成 ed25519 密钥切 SSH
+- f-string 转义: `\"` → 变量替代
+- 入门指南残留旧文字
+
+### 最终指标
+- 代码: 5,283 行 (app.py 1,376 + engine 3,517 + tests 390)
+- 测试: 21/21 全通过
+- 资产: 27 案例 + 5 作者 + 5 概念 + 1 规范 + 16 outputs
+- 部署: GitHub master + Streamlit Cloud 自动同步
+- Prompt: 42K→10K tokens (-77%)
+- YouTube 抓取: 171s→10s (评论限制+字幕按需)
+
 ---
 
 ## 2026-05-14 全 session 开发日志
