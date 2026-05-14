@@ -52,6 +52,80 @@ def _rebuild_row(parts: list) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Structured table API (parse markdown table → list[dict] → serialize back)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_DIMENSION_HEADERS = {
+    "severity": ["严重度", "案例"],
+    "action": ["分流建议", "案例"],
+    "platform": ["平台", "案例"],
+}
+
+_OVERVIEW_HEADERS_AUTO = ["案例", "标题", "严重度", "分流建议", "平台", "风险标签"]
+_OVERVIEW_HEADERS_CORRECTION = ["案例", "标题", "严重度", "分流建议", "平台", "类型", "日期"]
+
+
+def _is_table_row(line: str) -> bool:
+    """Check if a line is a markdown table data row (not header separator)."""
+    stripped = line.strip()
+    return bool(re.match(r'\|\s*\[\[cases/case-\d+\|', stripped))
+
+
+def _parse_row_to_dict(line: str, headers: list[str]) -> dict:
+    """Convert a markdown table row to {header: value} dict."""
+    parts = _split_table_cells(line)
+    result = {}
+    for i, h in enumerate(headers):
+        if i + 1 < len(parts):
+            result[h] = parts[i + 1].strip()
+        else:
+            result[h] = ""
+    return result
+
+
+def _dict_to_row(d: dict, headers: list[str]) -> str:
+    """Convert a {header: value} dict back to a markdown table row."""
+    cells = [f" {d.get(h, '')} " for h in headers]
+    return "|" + "|".join(cells) + "|"
+
+
+def _parse_table_section(lines: list[str], section_heading: str) -> tuple[list[str], list[dict]]:
+    """Extract a table from a section. Returns (headers, rows).
+
+    Scans from section_heading to the next `## ` or end of file.
+    """
+    in_section = False
+    after_separator = False
+    headers = []
+    rows = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(section_heading):
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if stripped.startswith("## "):
+            break
+
+        if not after_separator:
+            # Detect header separator (|---|...|)
+            if re.match(r'^\|[\s\-:|]+\|', stripped):
+                after_separator = True
+                continue
+            # Detect header row (starts with `|`, contains non-separator text)
+            if stripped.startswith("|") and not re.match(r'^\|[\s\-:|]+\|', stripped):
+                parts = _split_table_cells(line)
+                headers = [c.strip() for c in parts[1:-1]]  # skip leading/trailing empty
+        else:
+            if _is_table_row(line):
+                rows.append(_parse_row_to_dict(line, headers))
+
+    return headers, rows
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Dimension row update (DRY: used by severity / action / platform)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -97,6 +171,10 @@ def update_case_index(
 ) -> None:
     """Add new case to wiki/cases/index.md overview table + all dimension indexes.
 
+    Uses structured parse→modify→serialize for the overview table.
+    Dimension indexes continue to use _upsert_dimension_row (string-based,
+    well-tested, and dimension tables are simple 2-column structures).
+
     Args:
         new_filename: e.g. "case-012.md"
         severity: P0/P1/P2/P3
@@ -114,21 +192,40 @@ def update_case_index(
     title = title[:40]
     tags = tags or []
     today = date.today().isoformat()
-
-    # Build overview row (different format per source type)
-    if source == "human_correction":
-        new_row = f"| [[cases/{case_id}|{case_num}]] | {title} | {severity} | {action} | — | 纠偏案例 | {today} |"
-    else:
-        tags_str = ", ".join(tags[:3]) if tags else "-"
-        new_row = f"| [[cases/{case_id}|{case_num}]] | {title} | {severity} | {action} | {platform} | {tags_str} |"
+    case_ref = f"[[cases/{case_id}|{case_num}]]"
 
     with open(INDEX_PATH, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    # Insert after last case row in overview table
+    # --- Overview table: structured dict→row construction ---
+    if source == "human_correction":
+        use_headers = _OVERVIEW_HEADERS_CORRECTION
+        new_row_dict = {
+            "案例": case_ref,
+            "标题": title,
+            "严重度": severity,
+            "分流建议": action,
+            "平台": "—",
+            "类型": "纠偏案例",
+            "日期": today,
+        }
+    else:
+        use_headers = _OVERVIEW_HEADERS_AUTO
+        tags_str = ", ".join(tags[:3]) if tags else "-"
+        new_row_dict = {
+            "案例": case_ref,
+            "标题": title,
+            "严重度": severity,
+            "分流建议": action,
+            "平台": platform,
+            "风险标签": tags_str,
+        }
+
+    new_row = _dict_to_row(new_row_dict, use_headers)
+    # Find and insert after last case row
     last_case_line_idx = -1
     for i, line in enumerate(lines):
-        if re.match(r'\|\s*\[\[cases/case-\d+\|\d+\]\]', line):
+        if _is_table_row(line):
             last_case_line_idx = i
 
     new_lines = []
@@ -137,8 +234,7 @@ def update_case_index(
         if i == last_case_line_idx:
             new_lines.append(new_row)
 
-    # Update all dimension indexes
-    case_ref = f"[[cases/{case_id}|{case_num}]]"
+    # --- Dimension tables: existing _upsert_dimension_row (well-tested) ---
     section = None
 
     for i, line in enumerate(new_lines):
