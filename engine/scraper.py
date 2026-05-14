@@ -159,16 +159,32 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
         if text:
             comments.append({"内容": text.strip()[:500], "点赞": str(likes_c)})
 
-    # Build content
+    # Format duration
+    mins, secs = divmod(duration or 0, 60)
+    hours, mins = divmod(mins, 60)
+    dur_str = f"{hours}时{mins}分{secs}秒" if hours else f"{mins}分{secs}秒" if mins else f"{secs}秒"
+
+    # Build content (full description for LLM context)
     content_parts = [f"标题：{title}"]
     if description:
-        content_parts.append(f"\n描述：{description[:1000]}")
+        content_parts.append(f"\n描述：{description[:2000]}")
+    content_parts.append(f"\n时长：{dur_str}")
 
     result["原文内容"] = "\n".join(content_parts)
     result["发布者类型"] = f"YouTuber: {channel}{sub_str}"
     result["互动数据"] = f"播放{views:,}, 点赞{likes:,}, 评论{comment_count:,}"
     result["发布时间"] = upload_date
     result["评论列表"] = comments
+    result["社媒数据"] = {
+        "作者": channel,
+        "国家": "",
+        "点赞": likes,
+        "评论": comment_count,
+        "粉丝": channel_follower_count,
+        "播放量": views,
+        "时长": dur_str,
+        "作者主页": [f"https://www.youtube.com/@{channel.replace(' ', '')}" if channel else ""],
+    }
 
     return result
 
@@ -253,8 +269,25 @@ def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
     result["发布者类型"] = f"Reddit用户: {author}"
     result["互动数据"] = f"upvote {score}, {comment_count}"
     result["发布时间"] = post_time
+    result["社媒数据"] = {"作者": author, "国家": "", "点赞": _parse_int(score),
+                          "评论": _parse_int(comment_count), "粉丝": 0,
+                          "播放量": None, "作者主页": []}
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Generic helpers
+
+def _parse_int(s: str) -> int:
+    """Parse a string to int, handling '1.2k' like formats. Returns 0 on failure."""
+    if not s:
+        return 0
+    s = str(s).strip().lower().replace(",", "")
+    try:
+        return int(float(s))
+    except ValueError:
+        return 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -323,6 +356,9 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
     result["发布者类型"] = f"X用户: {author}"
     result["互动数据"] = f"回复{replies}, 转发{retweets}, 点赞{likes}, 查看{views}"
     result["发布时间"] = post_time
+    result["社媒数据"] = {"作者": author, "国家": "", "点赞": _parse_int(likes),
+                          "评论": _parse_int(replies), "粉丝": 0,
+                          "播放量": _parse_int(views), "作者主页": []}
 
     return result
 
@@ -368,6 +404,8 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
         browser.close()
 
     result["原文内容"] = f"标题：{title}\n\n正文：{body[:1500] if body else '(无法提取正文)'}"
+    result["社媒数据"] = {"作者": "", "国家": "", "点赞": 0, "评论": 0,
+                          "粉丝": 0, "播放量": None, "作者主页": []}
     return result
 
 
@@ -381,6 +419,35 @@ SCRAPERS = {
     "Reddit": _scrape_reddit,
     "X": _scrape_x,
 }
+
+
+def fetch_youtube_subtitles(url: str) -> str:
+    """Fetch auto-captions / subtitles from a YouTube video. Returns text or empty string."""
+    import yt_dlp, urllib.request, json as _json
+    ydl_opts = {
+        "quiet": True, "no_warnings": True, "extract_flat": False,
+        "writesubtitles": True, "writeautomaticsub": True,
+        "subtitleslangs": ["zh-Hans", "zh", "en"],
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    subs = info.get("subtitles") or info.get("automatic_captions") or {}
+    for lang in ("zh-Hans", "zh", "en"):
+        for e in subs.get(lang, []):
+            if e.get("ext") in ("json3", "srv1", "srv2", "srv3"):
+                try:
+                    resp = urllib.request.urlopen(e["url"], timeout=15)
+                    events = _json.loads(resp.read()).get("events", [])
+                    lines = []
+                    for ev in events[:500]:
+                        for seg in ev.get("segs", []):
+                            t = seg.get("utf8", "").strip()
+                            if t and t not in ("\n", "[音乐]", "[Music]", "[掌声]", "[Applause]"):
+                                lines.append(t)
+                    return " ".join(lines)
+                except Exception:
+                    pass
+    return ""
 
 
 def scrape(url: str, timeout: int = 30000) -> dict:

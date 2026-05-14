@@ -188,6 +188,7 @@ def update_case_index(new_filename: str, human_correction: dict) -> None:
     severity = human_correction.get("严重度评级", "?")
     action = human_correction.get("分流建议", "?")
     title = human_correction.get("摘要", "纠偏案例")[:40]
+    categories = human_correction.get("舆情分类", [])
 
     do_update(
         new_filename=new_filename,
@@ -196,6 +197,7 @@ def update_case_index(new_filename: str, human_correction: dict) -> None:
         title=title,
         platform="—",
         tags=["纠偏案例"],
+        categories=categories,
         source="human_correction",
     )
 

@@ -18,13 +18,15 @@ OUTPUT_DIR = PROJECT_DIR / "outputs"
 sys.path.insert(0, str(PROJECT_DIR))
 
 import streamlit as st
-from engine.scraper import scrape, SCRAPERS, _detect_platform, _extract_content_id, PLATFORM_ABBREV
+from engine.scraper import scrape, SCRAPERS, _detect_platform, _extract_content_id, PLATFORM_ABBREV, fetch_youtube_subtitles
 from engine.annotate import (
     build_system_prompt,
     load_config,
     format_user_message,
     annotate_one,
     annotate_one_stream,
+    CATEGORY_OPTIONS,
+    find_similar_cases,
 )
 from engine.correction_handler import handle_correction
 from engine.ingestor import ingest
@@ -65,13 +67,13 @@ for key, default in [
     ("demo_guide_shown", False),
     ("kb_authenticated", False),
     ("batch_results", None),
+    ("_result_source", ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 # Snap deferred annotation requests (cleared old result on previous run, now do actual work)
 _pending_annotate_url = st.session_state.pop("_annotate_url", None)
-_pending_annotate_manual = st.session_state.pop("_annotate_manual", False)
 _pending_batch_urls = st.session_state.pop("_batch_urls", None)
 _patrol_pending = st.session_state.pop("_patrol_pending", False)
 
@@ -94,117 +96,65 @@ if not st.session_state.demo_guide_shown and not st.session_state.annotation_res
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.subheader("系统状态")
+    st.subheader("⚙️ 系统")
 
-    if st.button("加载/刷新知识库"):
-        with st.spinner("加载 Wiki 知识库..."):
+    # Auto-load KB on first visit
+    if st.session_state.config is None:
+        config = load_config()
+        _, kb_stats = build_system_prompt()
+        st.session_state.config = config
+        st.session_state.system_prompt_loaded = True
+        st.session_state.kb_stats = kb_stats
+
+    if st.button("🔄 刷新知识库", use_container_width=True):
+        with st.spinner("加载中..."):
             config = load_config()
-            system_prompt, kb_stats = build_system_prompt()
+            _, kb_stats = build_system_prompt()
             st.session_state.config = config
-            st.session_state.cached_system_prompt = system_prompt
             st.session_state.system_prompt_loaded = True
             st.session_state.kb_stats = kb_stats
 
-    if st.session_state.system_prompt_loaded:
-        kb = st.session_state.kb_stats
+    kb = st.session_state.kb_stats
+    if kb:
         loaded = sum(1 for v in kb["layers"].values() if v["status"] == "loaded")
-        st.success(f"知识库: {loaded}/{len(kb['layers'])} 页 (~{kb['total_estimated_tokens']} tokens)")
-        st.info(f"模型: {st.session_state.config.get('model', '?')}")
-        st.info(f"Provider: {st.session_state.config.get('provider', '?')}")
-    else:
-        st.warning("请先加载知识库")
-        # 自动加载
-        if st.session_state.config is None:
-            config = load_config()
-            system_prompt, kb_stats = build_system_prompt()
-            st.session_state.config = config
-            st.session_state.cached_system_prompt = system_prompt
-            st.session_state.system_prompt_loaded = True
-            st.session_state.kb_stats = kb_stats
-            st.rerun()
-
+        st.caption(f"知识库: {loaded}/{len(kb['layers'])} 页 | 模型: {st.session_state.config.get('model', '?')}")
     api_key = (st.session_state.config or {}).get("api_key", "")
-    if api_key:
-        st.success("API Key: 已配置")
-    else:
-        st.error("API Key: 未配置")
+    st.caption(f"API Key: {'✅' if api_key else '⚠️ 未配置'}")
 
-    # Dashboard (auto-refresh from disk)
+    # Dashboard (always visible, compact)
     st.divider()
-    with st.expander("📊 系统仪表盘", expanded=False):
-        try:
-            from datetime import date as _date
-            wiki_dir = PROJECT_DIR / "wiki"
-            cases_dir = wiki_dir / "cases"
-            case_files = sorted(cases_dir.glob("case-*.md"))
-            total = len(case_files)
-
-            sev_count = {"P0": 0, "P1": 0, "P2": 0, "P3": 0}
-            plat_count = {}
-            for cf in case_files:
-                text = cf.read_text(encoding="utf-8")
-                parts = text.split("---", 2)
-                if len(parts) >= 3:
-                    for line in parts[1].split("\n"):
-                        line = line.strip()
-                        if line.startswith("severity:"):
-                            s = line.split(":")[1].strip()
-                            if s in sev_count:
-                                sev_count[s] += 1
-                        elif line.startswith("platform:"):
-                            p = line.split(":")[1].strip()
-                            if p and p != "?":
-                                plat_count[p] = plat_count.get(p, 0) + 1
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("案例总数", total)
-            with c2:
-                p1_count = sev_count.get("P1", 0)
-                st.metric("P0/P1 高优", sev_count.get("P0", 0) + p1_count)
-
-            st.caption(f"P0: {sev_count['P0']} | P1: {sev_count['P1']} | P2: {sev_count['P2']} | P3: {sev_count['P3']}")
-
-            if plat_count:
-                plat_items = sorted(plat_count.items(), key=lambda x: -x[1])
-                st.caption("  |  ".join(f"{k}: {v}" for k, v in plat_items))
-
-            # Recent log entries
-            log_path = wiki_dir / "log.md"
-            if log_path.exists():
-                log_lines = log_path.read_text(encoding="utf-8").strip().split("\n")
-                recent = [l for l in log_lines if l.startswith("### ")][-3:]
-                if recent:
-                    st.caption("---")
-                    st.caption("最近操作:")
-                    for r in recent:
-                        st.caption(r.strip("# ")[:60])
-        except Exception:
-            st.caption("(仪表盘加载失败)")
-
-    # 纠偏率监控
     try:
-        log_path = PROJECT_DIR / "wiki" / "log.md"
-        if log_path.exists():
-            log_text = log_path.read_text(encoding="utf-8")
-            total_ingests = log_text.count("自动Ingest")
-            total_corrections = log_text.count("纠偏")
-            total_ops = total_ingests + total_corrections
-            if total_ops > 0:
-                accuracy = round((1 - total_corrections / total_ops) * 100)
-                st.divider()
-                st.caption(f"AI 标注准确率: {accuracy}% ({total_ops} 次操作, {total_corrections} 次纠偏)")
-                color = "#28a745" if accuracy >= 80 else "#ffc107" if accuracy >= 60 else "#dc3545"
-                st.markdown(
-                    f"<div style='background:{color};height:6px;border-radius:3px;width:{accuracy}%'></div>",
-                    unsafe_allow_html=True,
-                )
+        cases_dir = PROJECT_DIR / "wiki" / "cases"
+        case_files = sorted(cases_dir.glob("case-*.md"))
+        total = len(case_files)
+        sev_count = {"P0": 0, "P1": 0, "P2": 0, "P3": 0}
+        plat_count = {}
+        for cf in case_files:
+            text = cf.read_text(encoding="utf-8")
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                for line in parts[1].split("\n"):
+                    line = line.strip()
+                    if line.startswith("severity:"):
+                        s = line.split(":")[1].strip()
+                        if s in sev_count:
+                            sev_count[s] += 1
+                    elif line.startswith("platform:"):
+                        p = line.split(":")[1].strip()
+                        if p and p != "?":
+                            plat_count[p] = plat_count.get(p, 0) + 1
+        c1, c2, c3 = st.columns(3)
+        c1.metric("案例", total)
+        c2.metric("P0/P1", sev_count.get("P0", 0) + sev_count.get("P1", 0))
+        c3.metric("平台", len(plat_count))
+        st.caption(f"P0:{sev_count['P0']} P1:{sev_count['P1']} P2:{sev_count['P2']} P3:{sev_count['P3']}" +
+                   (f"  |  " + " ".join(f"{k}:{v}" for k, v in sorted(plat_count.items(), key=lambda x: -x[1])[:4]) if plat_count else ""))
     except Exception:
-        pass
+        st.caption("仪表盘加载失败")
 
-    # 巡检监控
+    # 监控 & 工具
     st.divider()
-    with st.expander("📡 巡检监控", expanded=bool(_patrol_pending)):
+    with st.expander("📡 巡检 & 登录", expanded=bool(_patrol_pending)):
         patrol_urls_file = ENGINE_DIR / "monitored_urls.json"
         if patrol_urls_file.exists():
             import json as _json
@@ -216,7 +166,7 @@ with st.sidebar:
             # Execute patrol if pending
             if _patrol_pending:
                 config = st.session_state.config
-                system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+                system_prompt = build_system_prompt()[0]
                 results = []
                 p0p1 = 0
                 status = st.empty()
@@ -254,75 +204,37 @@ with st.sidebar:
         else:
             st.caption("无监控配置")
 
-    # XHS Cookie 状态
-    try:
-        import json as _json
-        from datetime import datetime as _dt
-        cookie_file = ENGINE_DIR / ".xhs_cookies.json"
-        if cookie_file.exists():
-            with open(cookie_file, "r", encoding="utf-8") as _f:
-                cookie_data = _json.load(_f)
-            saved_ts = cookie_data.get("saved_at", 0)
-            if saved_ts:
-                saved_dt = _dt.fromtimestamp(saved_ts)
-                days_left = 7 - (_dt.now() - saved_dt).days
-                if days_left <= 0:
-                    st.error("小红书 Cookie 已过期，请刷新登录")
-                elif days_left <= 1:
-                    st.warning(f"小红书 Cookie 即将过期 (剩余 {days_left} 天)")
+        st.divider()
+        st.caption("小红书登录状态")
+        try:
+            import json as _json
+            from datetime import datetime as _dt
+            cookie_file = ENGINE_DIR / ".xhs_cookies.json"
+            if cookie_file.exists():
+                with open(cookie_file, "r", encoding="utf-8") as _f:
+                    cookie_data = _json.load(_f)
+                saved_ts = cookie_data.get("saved_at", 0)
+                if saved_ts:
+                    saved_dt = _dt.fromtimestamp(saved_ts)
+                    days_left = 7 - (_dt.now() - saved_dt).days
+                    if days_left <= 0:
+                        st.error("Cookie 已过期")
+                    elif days_left <= 1:
+                        st.warning(f"Cookie 即将过期 ({days_left}天)")
+                    else:
+                        st.caption(f"Cookie 有效 (剩余 {days_left} 天)")
+        except Exception:
+            pass
+        if st.button("刷新小红书登录", use_container_width=True, key="sidebar_xhs_login"):
+            from engine.xhs_fetcher import bootstrap_cookies
+            with st.spinner("正在打开浏览器..."):
+                if bootstrap_cookies(force=True):
+                    st.success("登录成功！")
                 else:
-                    st.caption(f"小红书 Cookie: 剩余 {days_left} 天")
-    except Exception:
-        pass
-
-    st.divider()
-    st.subheader("小红书登录")
-    if st.button("刷新小红书登录", use_container_width=True):
-        from engine.xhs_fetcher import bootstrap_cookies
-        with st.spinner("正在打开浏览器，请扫码登录..."):
-            cookie = bootstrap_cookies(force=True)
-            if cookie:
-                st.success("小红书登录成功！")
-            else:
-                st.error("登录失败或超时，请重试")
+                    st.error("登录失败")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Demo 数据
-# ═══════════════════════════════════════════════════════════════════════════════
-
-DEMO_DATA = {
-    "原文内容": (
-        "标题：某品牌新品发布会后网友炸锅了\n\n"
-        "正文：今天参加了XX品牌的新品发布会，现场展示的产品功能确实让人眼前一亮。"
-        "但回到价格环节，全场鸦雀无声——起售价直接比上一代涨了40%，"
-        "配置升级却只有小幅迭代。不少媒体同行当场表示'定价策略有问题'。"
-        "不过也有粉丝认为品牌溢价合理，毕竟生态体验确实好。大家怎么看？"
-    ),
-    "来源平台": "小红书",
-    "发布者类型": "KOL (粉丝量 12万)",
-    "互动数据": "点赞 3.2万，收藏 8900，评论 4200，分享 1500",
-    "评论列表": [
-        {"内容": "太贵了，这个价格我为什么不买竞品？人家配置还更高", "点赞": "2300"},
-        {"内容": "用过的人表示生态体验确实值这个价，别只看参数", "点赞": "1800"},
-        {"内容": "作为老用户感觉被背刺了，上一代买完半年就出新款", "点赞": "950"},
-        {"内容": "弱弱问一句，这个和之前那个版本有什么区别吗？", "点赞": "320"},
-        {"内容": "已下单，信仰充值，不解释", "点赞": "1500"},
-        {"内容": "理性讨论，这个定价策略是不是在清上一代库存？", "点赞": "670"},
-        {"内容": "对比了一下参数，升级幅度确实小，不如等下一代", "点赞": "430"},
-        {"内容": "说贵的都是没用过的吧，用了就知道真香", "点赞": "1200"},
-    ],
-}
-
-def load_demo():
-    """Fill session state with demo data."""
-    d = DEMO_DATA
-    st.session_state.manual_content = d["原文内容"]
-    st.session_state.manual_platform = d["来源平台"]
-    st.session_state.manual_publisher = d["发布者类型"]
-    st.session_state.manual_engagement = d["互动数据"]
-    st.session_state.manual_comments = "\n".join(c["内容"] for c in d["评论列表"])
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Wiki 浏览器辅助函数
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -354,7 +266,7 @@ def _load_wiki_pages() -> list[dict]:
     """
     pages = []
     wiki_dir = PROJECT_DIR / "wiki"
-    dir_order = ["concepts", "entities", "sources", "syntheses", "cases"]
+    dir_order = ["concepts", "entities", "sources", "syntheses", "cases", "authors"]
 
     for dirname in dir_order:
         dir_path = wiki_dir / dirname
@@ -414,6 +326,12 @@ def _render_annotation_result(key_prefix: str = ""):
     result = st.session_state.annotation_result
     if not result:
         return
+    # Source filter: only render if result belongs to this tab
+    source_map = {"tab1_": "manual", "tab2_": "url", "demo_": "demo"}
+    expected = source_map.get(key_prefix, "")
+    actual = st.session_state.get("_result_source", "")
+    if expected and actual and expected != actual and not result.get("_batch_summary"):
+        return
 
     if st.session_state.scraped_data:
         with st.expander("原始数据预览", expanded=False, key=f"{key_prefix}raw_preview_expander"):
@@ -426,6 +344,28 @@ def _render_annotation_result(key_prefix: str = ""):
         if "raw_response" in result:
             st.text(result["raw_response"][:500])
         return
+
+    # -------- 社媒数据卡片 --------
+    scraped = st.session_state.scraped_data
+    social = scraped.get("社媒数据") if scraped else None
+    if social and social.get("作者"):
+        platform = scraped.get("来源平台", "?")
+        pub_time = scraped.get("发布时间", "") or "未知"
+        with st.expander(f"📊 社媒数据 — {social.get('作者', '?')}", expanded=False, key=f"{key_prefix}social_card"):
+            c0, c1, c2, c3, c4, c5 = st.columns(6)
+            views = social.get("播放量")
+            c0.metric("平台", platform)
+            c1.metric("播放量", f"{views:,}" if views else "—",
+                      help="[估算]" if social.get("_播放量估算") else None)
+            c2.metric("点赞", f"{social.get('点赞', 0):,}" if social.get('点赞') else "—")
+            c3.metric("评论", f"{social.get('评论', 0):,}" if social.get('评论') else "—")
+            c4.metric("粉丝", f"{social.get('粉丝', 0):,}" if social.get('粉丝') else "—")
+            c5.metric("国家", social.get("国家") or "—")
+            st.caption(f"🕐 发布时间: {pub_time}" + (f" | ⏱ 时长: {social.get('时长')}" if social.get('时长') else ""))
+            if social.get("作者主页"):
+                for hp in social["作者主页"]:
+                    if hp:
+                        st.caption(f"🔗 {hp}")
 
     # -------- P0/P1 醒目告警 --------
     severity = result.get("严重度评级", "?")
@@ -464,10 +404,102 @@ def _render_annotation_result(key_prefix: str = ""):
     with col_r2:
         st.caption(f"分流理由: {result.get('分流理由', '')}")
 
-    # -------- 风险标签 --------
+    # -------- 简介 --------
+    summary = result.get("摘要", "")
+    if summary:
+        st.markdown(f"**📝 简介**: {summary}")
+
+    # -------- YouTube AI 深度分析（仅 YouTube 平台）--------
+    if scraped and scraped.get("来源平台") == "YouTube":
+        yt_col1, yt_col2 = st.columns([1, 3])
+        with yt_col1:
+            if st.button("🎬 YouTube AI 视频内容分析", key=f"{key_prefix}yt_deep_analysis"):
+                st.session_state[f"{key_prefix}_yt_analyze"] = True
+                st.rerun()
+        with yt_col2:
+            if "字幕" not in scraped.get("原文内容", ""):
+                if st.button("📥 下载字幕 TXT", key=f"{key_prefix}sub_download"):
+                    st.session_state[f"{key_prefix}_fetch_sub"] = True
+                    st.rerun()
+
+        # Execute deep analysis
+        if st.session_state.get(f"{key_prefix}_yt_analyze"):
+            with st.spinner("正在提取字幕并深度分析视频内容..."):
+                subs = fetch_youtube_subtitles(scraped.get("原文链接", ""))
+                if subs:
+                    config = st.session_state.config
+                    system_prompt = build_system_prompt(subs)[0]
+                    analysis_prompt = (
+                        f"你是一个舆情分析师。请根据以下YouTube视频的标题、描述和字幕内容，"
+                        f"给出深度的内容分析报告（300字以内），包括：\n"
+                        f"1. 视频核心观点和立场\n2. 关键事实和数据\n3. 对品牌/产品的潜在影响\n\n"
+                        f"标题：{scraped.get('原文内容', '')[:300]}\n\n字幕内容：{subs[:3000]}"
+                    )
+                    try:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=config["api_key"], base_url=config["api_base"])
+                        resp = client.chat.completions.create(
+                            model=config["model"], max_tokens=800, temperature=0.3,
+                            messages=[{"role": "user", "content": analysis_prompt}],
+                        )
+                        deep = resp.choices[0].message.content
+                        st.success("🎬 AI 视频内容分析")
+                        st.markdown(deep)
+                        st.session_state[f"{key_prefix}_subs_text"] = subs
+                    except Exception as e:
+                        st.error(f"分析失败: {e}")
+                else:
+                    st.warning("该视频无可抓取字幕")
+            st.session_state[f"{key_prefix}_yt_analyze"] = False
+
+        # Subtitle download
+        if st.session_state.get(f"{key_prefix}_fetch_sub"):
+            with st.spinner("正在下载字幕..."):
+                subs = fetch_youtube_subtitles(scraped.get("原文链接", ""))
+                if subs:
+                    st.session_state[f"{key_prefix}_subs_text"] = subs
+                    st.session_state[f"{key_prefix}_sub_ready"] = True
+                else:
+                    st.warning("该视频无可抓取字幕")
+            st.session_state[f"{key_prefix}_fetch_sub"] = False
+
+        if st.session_state.get(f"{key_prefix}_sub_ready"):
+            subs = st.session_state.get(f"{key_prefix}_subs_text", "")
+            st.download_button("⬇ 点击下载字幕文件", subs, file_name="youtube_subtitles.txt",
+                              mime="text/plain", key=f"{key_prefix}_dl_btn")
+        elif st.session_state.get(f"{key_prefix}_subs_text"):
+            st.caption("字幕已就绪，可下载")
+
+    # -------- 近似舆情 --------
     tags = result.get("风险标签", [])
     if tags:
         st.write(" ".join([f"`{t}`" for t in tags]))
+        similar = find_similar_cases(tags, top_k=3)
+        if similar:
+            with st.expander(f"🔍 近似舆情 ({len(similar)} 个相似案例)", expanded=False, key=f"{key_prefix}similar_cases"):
+                for s in similar:
+                    cid = s["filename"].replace(".md", "")
+                    st.markdown(
+                        f"- [[cases/{cid}|{s['filename'].replace('.md','')}]] "
+                        f"**{s['severity']}** | 命中 {s['hits']} tag | {s['title'][:50]}"
+                    )
+                    if st.button(f"📖 查看 {s['filename']}", key=f"{key_prefix}view_{s['filename']}"):
+                        st.session_state._selected_page = f"cases/{s['filename']}"
+                        st.rerun()
+
+    # -------- 舆情分类 --------
+    categories = result.get("舆情分类", [])
+    if categories:
+        cat_colors = {
+            "商品问题": "#fd7e14", "商品侵权问题": "#dc3545", "售后问题": "#6f42c1",
+            "数据泄露": "#e83e8c", "软件问题": "#0d6efd", "其他": "#6c757d",
+        }
+        fallback = "#6c757d"
+        cat_html = " ".join(
+            f"<span style='background:{cat_colors.get(c, fallback)};color:white;padding:2px 8px;border-radius:10px;font-size:0.85em;margin-right:4px;'>{c}</span>"
+            for c in categories
+        )
+        st.markdown(cat_html, unsafe_allow_html=True)
 
     # -------- 评论区红绿灯 --------
     comments_analysis = result.get("评论区分析")
@@ -580,6 +612,12 @@ def _render_annotation_result(key_prefix: str = ""):
             index=["正面", "负面", "中性", "混合"].index(sentiment) if sentiment in ["正面", "负面", "中性", "混合"] else 3,
             key=f"{key_prefix}corr_sentiment",
         )
+        corr_categories = st.multiselect(
+            "舆情分类",
+            CATEGORY_OPTIONS,
+            default=categories if isinstance(categories, list) else [],
+            key=f"{key_prefix}corr_categories",
+        )
         corr_summary = st.text_area("摘要", value=result.get("摘要", ""), key=f"{key_prefix}corr_summary")
         corr_reason = st.text_area("严重度理由", value=result.get("严重度理由", ""), key=f"{key_prefix}corr_reason")
 
@@ -633,6 +671,7 @@ def _render_annotation_result(key_prefix: str = ""):
             human_correction["情感分析"]["整体情感"] = corr_sentiment
             human_correction["摘要"] = corr_summary
             human_correction["严重度理由"] = corr_reason
+            human_correction["舆情分类"] = corr_categories
 
             if ai_comment_details and corrected_sentiments:
                 new_details = []
@@ -710,105 +749,199 @@ def _render_annotation_result(key_prefix: str = ""):
             st.caption(f"知识库: 已有案例 {ir['case_file']}，跳过自动 Ingest。")
 
 
-tab1, tab2, tab3, tab4 = st.tabs(["📝 手动输入", "🔗 URL 抓取", "📚 知识库", "💬 扫地僧"])
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helper functions (must be defined before tabs — called in deferred annotation blocks)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-with tab1:
-    # Demo button
-    demo_col1, demo_col2 = st.columns([1, 3])
-    with demo_col1:
-        if st.button("📋 加载 Demo 示例", use_container_width=True):
-            load_demo()
-            st.rerun()
+def _save_annotation_output(
+    scraped_data: dict,
+    annotation_result: dict,
+    url: str = "",
+) -> str | None:
+    platform = scraped_data.get("来源平台", "未知")
+    today = date.today().isoformat()
+    content_id = _extract_content_id(url, platform) if url else "manual"
+    abbrev = PLATFORM_ABBREV.get(platform, "web")
+    filename = f"{today}_{abbrev}_{content_id}_annotation.json"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = OUTPUT_DIR / filename
+    payload = {
+        "scraped_data": scraped_data,
+        "annotation_result": annotation_result,
+        "ingested_at": datetime.now().isoformat(),
+    }
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return filename
+    except OSError:
+        return None
 
-    manual_content = st.text_area(
-        "原文内容",
-        placeholder="把帖文/评论/视频描述原文粘贴在这里，或点击上方「加载 Demo 示例」体验完整流程...",
-        height=150,
-        key="manual_content",
-    )
-    mcol1, mcol2, mcol3 = st.columns(3)
-    with mcol1:
-        manual_platform = st.selectbox(
-            "来源平台",
-            ["小红书", "YouTube", "Instagram", "TikTok", "X (Twitter)", "Reddit", "新闻媒体", "论坛", "其他"],
-            key="manual_platform",
-        )
-    with mcol2:
-        manual_publisher = st.text_input("发布者类型", placeholder="普通用户 / KOL(粉丝量) / 媒体", key="manual_publisher")
-    with mcol3:
-        manual_engagement = st.text_input("互动数据", placeholder="点赞XX，转发XX，评论XX", key="manual_engagement")
 
-    manual_comments = st.text_area(
-        "评论区内容（选填，每行一条）",
-        placeholder="评论1\n评论2\n评论3\n...（最多10条）",
-        height=100,
-        key="manual_comments",
-    )
-    manual_annotate_btn = st.button("标注", type="primary", use_container_width=True,
-                                    disabled=not bool(manual_content.strip()))
+def _do_ingest(scraped_data: dict, annotation_result: dict, url: str = "") -> dict:
+    try:
+        return ingest(scraped_data, annotation_result, url)
+    except Exception as e:
+        return {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
 
-    # Deferred manual annotation (old result cleared, now run actual work)
-    if _pending_annotate_manual:
-        item = {
-            "原文内容": manual_content.strip(),
-            "来源平台": manual_platform,
-            "发布者类型": manual_publisher or "未知",
-            "互动数据": manual_engagement or "暂无",
-            "发布时间": "",
-            "原文链接": "",
-        }
-        if manual_comments.strip():
-            item["评论列表"] = [
-                {"内容": line.strip(), "点赞": ""}
-                for line in manual_comments.strip().split("\n")
-                if line.strip()
-            ][:10]
-        st.session_state.scraped_data = item
-        config = st.session_state.config
-        system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
-        user_msg = format_user_message(item)
-        progress = st.empty()
-        result = None
-        for event in annotate_one_stream(user_msg, system_prompt, config):
-            if event["type"] == "progress":
-                progress.info(f"AI 正在分析... (已生成 {event['chars']} 字符)")
-            elif event["type"] == "result":
-                result = event["data"]
-                progress.empty()
-        if result is None:
-            result = {"error": True, "message": "流式标注未返回结果"}
-        st.session_state.annotation_result = result
+
+def _clear_correction_widgets():
+    for key in list(st.session_state.keys()):
+        if key.startswith("corr_") or key.startswith("tab1_corr_") or key.startswith("tab2_corr_"):
+            del st.session_state[key]
+
+
+def do_scrape(url: str):
+    with st.spinner(f"正在抓取 {url[:60]}..."):
+        data = scrape(url)
+        st.session_state.scraped_data = data
+        st.session_state.annotation_result = None
         st.session_state.correction_result = None
         st.session_state.ingest_result = None
         _clear_correction_widgets()
-        if result and not result.get("error"):
-            _save_annotation_output(item, result)
-            st.session_state.ingest_result = _do_ingest(item, result)
-        st.session_state._needs_rerun = True
+    return data
 
-    _render_annotation_result("tab1_")
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📝 手工录入", "🔗 URL 抓取", "📚 知识库", "💬 扫地僧", "🎬 操作演示"
+])
+
+with tab1:
+    st.caption("适用于小红书/YTB之外的平台内容，或无法自动抓取的内容。所有字段人工填写。")
+
+    # --- txt upload → AI summary ---
+    uploaded_file = st.file_uploader("📎 上传 txt 文件（AI 自动总结）", type=["txt"], key="manual_upload")
+    ai_summary_btn = st.button("🤖 AI 总结上传内容", disabled=not bool(uploaded_file), key="ai_summary_btn",
+                               help="读取上传的 txt 内容，AI 生成简介摘要")
+
+    if ai_summary_btn and uploaded_file:
+        try:
+            txt_content = uploaded_file.read().decode("utf-8")
+            st.session_state.manual_content = txt_content[:5000]
+            # Generate summary via LLM
+            config = st.session_state.config
+            if config and config.get("api_key"):
+                from openai import OpenAI
+                client = OpenAI(api_key=config["api_key"], base_url=config["api_base"])
+                resp = client.chat.completions.create(
+                    model=config["model"], max_tokens=200, temperature=0.3, timeout=30,
+                    messages=[{"role": "user", "content": f"请用80字以内总结以下内容的核心问题、涉及品牌/产品、舆论倾向：\n\n{txt_content[:3000]}"}],
+                )
+                st.session_state.manual_summary = resp.choices[0].message.content.strip()
+                st.success("AI 总结已生成")
+            else:
+                st.warning("请先在侧边栏加载知识库（配置 API Key）")
+        except Exception as e:
+            st.error(f"上传失败: {e}")
+
+    # --- URL & Platform ---
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        manual_url = st.text_input("原文链接 *", placeholder="https://...  （必填，用于知识库溯源）", key="manual_url")
+    with c2:
+        manual_platform = st.selectbox("来源平台", ["小红书", "YouTube", "Instagram", "TikTok", "X (Twitter)", "Reddit", "新闻媒体", "论坛", "其他"], key="manual_platform")
+    with c3:
+        manual_publish_time = st.text_input("发布时间", placeholder="2025-01-15", key="manual_publish_time")
+
+    manual_author = st.text_input("作者名称", key="manual_author")
+
+    # --- 社媒数据 ---
+    with st.expander("📊 社媒数据（选填）", expanded=False):
+        s1, s2, s3, s4 = st.columns(4)
+        with s1: manual_views = st.text_input("播放量", placeholder="0", key="manual_views")
+        with s2: manual_likes = st.text_input("点赞数", placeholder="0", key="manual_likes")
+        with s3: manual_followers = st.text_input("粉丝数", placeholder="0", key="manual_followers")
+        with s4: manual_country = st.text_input("国家", placeholder="CN/US/...", key="manual_country")
+        manual_homepage = st.text_input("作者主页 URL", placeholder="https://...", key="manual_homepage")
+
+    # --- 分类 & 评定 ---
+    d1, d2 = st.columns(2)
+    with d1:
+        manual_categories = st.multiselect("舆情分类", CATEGORY_OPTIONS, key="manual_categories")
+        manual_severity = st.selectbox("严重度评级", ["P0", "P1", "P2", "P3"], index=2, key="manual_severity")
+    with d2:
+        manual_action = st.selectbox("分流建议", ["立即处理", "持续观察", "可忽略", "正面可利用"], index=1, key="manual_action")
+        manual_sentiment = st.selectbox("整体情感", ["正面", "负面", "中性", "混合"], index=2, key="manual_sentiment")
+
+    manual_summary = st.text_area("简介 *", placeholder="案例摘要（必填。可上传 txt 后 AI 自动填充）", height=120, key="manual_summary")
+    manual_reason = st.text_input("严重度理由", placeholder="为什么评定这个严重度...", key="manual_reason")
+
+    # --- Save + Next ---
+    sc1, sc2 = st.columns([2, 1])
+    with sc1:
+        if st.button("💾 保存到知识库", type="primary", use_container_width=True, disabled=not (manual_url.strip() and manual_summary.strip())):
+            scraped = {
+                "原文内容": manual_summary.strip(),
+                "来源平台": manual_platform,
+                "发布者类型": f"用户: {manual_author}" if manual_author else "未知",
+                "互动数据": "",
+                "发布时间": manual_publish_time or "",
+                "原文链接": manual_url.strip(),
+                "评论列表": [],
+                "社媒数据": {
+                    "作者": manual_author or "未知", "国家": manual_country,
+                    "点赞": int(manual_likes) if manual_likes.isdigit() else 0,
+                    "评论": 0,
+                    "粉丝": int(manual_followers) if manual_followers.isdigit() else 0,
+                    "播放量": int(manual_views) if manual_views.isdigit() else None,
+                    "时长": "", "作者主页": [manual_homepage] if manual_homepage.strip() else [],
+                } if any([manual_author, manual_country, manual_likes, manual_followers, manual_views, manual_homepage.strip()]) else None,
+            }
+            annotation = {
+                "严重度评级": manual_severity, "分流建议": manual_action,
+                "情感分析": {"整体情感": manual_sentiment},
+                "摘要": manual_summary.strip(), "严重度理由": manual_reason or "人工录入",
+                "风险标签": [], "舆情分类": manual_categories,
+            }
+            st.session_state.scraped_data = scraped
+            st.session_state.annotation_result = annotation
+            st.session_state._result_source = "manual"
+            _save_annotation_output(scraped, annotation)
+            st.session_state.ingest_result = _do_ingest(scraped, annotation)
+            st.success("已保存到知识库！")
+            st.session_state._needs_rerun = True
+    with sc2:
+        if st.button("📋 下一个案例", use_container_width=True, help="清空表单，准备录入下一条"):
+            for k in ["manual_url", "manual_author", "manual_views", "manual_likes", "manual_followers",
+                       "manual_country", "manual_homepage", "manual_summary", "manual_reason", "manual_publish_time"]:
+                if k in st.session_state: del st.session_state[k]
+            st.rerun()
+
+    if st.session_state.ingest_result:
+        ir = st.session_state.ingest_result
+        if ir["action"] == "case_generated":
+            st.success(f"知识库已更新: {ir['case_file']}")
 
 with tab2:
-    st.info("URL 抓取需要本地浏览器环境，在线 Demo 不可用。建议使用左侧「📝 手动输入」标签页，或点击「📋 加载 Demo 示例」快速体验。")
+    st.info("URL 抓取需要本地浏览器环境，在线 Demo 不可用。支持 YouTube 和小红书链接。")
     url_input = st.text_input(
         "粘贴舆情链接",
         placeholder="https://www.xiaohongshu.com/explore/... 或 https://www.youtube.com/watch?v=...",
         key="url_input",
     )
+    # URL validation: only YouTube and 小红书 are supported
+    url_valid = True
+    url_platform = ""
+    if url_input.strip():
+        url_platform = _detect_platform(url_input.strip())
+        if url_platform not in ("YouTube", "小红书"):
+            url_valid = False
+            st.warning(f"暂不支持「{url_platform}」平台。目前仅支持 YouTube 和小红书链接。")
+
     col1, col2 = st.columns([1, 1])
     with col1:
         scrape_btn = st.button("抓取内容", type="primary", use_container_width=True,
-                               disabled=not bool(url_input.strip()))
+                               disabled=not (url_input.strip() and url_valid))
     with col2:
         annotate_scraped_btn = st.button("抓取并标注", type="secondary", use_container_width=True,
-                                         disabled=not bool(url_input.strip()))
+                                         disabled=not (url_input.strip() and url_valid))
 
     # Deferred URL annotation (old result cleared, now run actual scrape+annotate)
     if _pending_annotate_url:
         data = do_scrape(_pending_annotate_url)
         if data and not data.get("_scrape_error"):
             config = st.session_state.config
-            system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+            system_prompt = build_system_prompt(data.get("原文内容", ""))[0]
             user_msg = format_user_message(data)
             progress = st.empty()
             result = None
@@ -821,6 +954,7 @@ with tab2:
             if result is None:
                 result = {"error": True, "message": "流式标注未返回结果"}
             st.session_state.annotation_result = result
+            st.session_state._result_source = "url"
             st.session_state.correction_result = None
             st.session_state.ingest_result = None
             _clear_correction_widgets()
@@ -850,7 +984,7 @@ with tab2:
         # Deferred batch processing
         if _pending_batch_urls:
             config = st.session_state.config
-            system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+            system_prompt = build_system_prompt()[0]
             results = []
             status_placeholder = st.empty()
             progress_bar = st.progress(0)
@@ -965,6 +1099,7 @@ with tab3:
             "sources": ("📄 Sources", True),
             "syntheses": ("🔗 Syntheses", True),
             "cases": ("📋 Cases", True),
+            "authors": ("👤 Authors", False),
         }
 
         for dirname, (label, default_expanded) in type_labels.items():
@@ -1099,60 +1234,111 @@ with tab4:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 抓取逻辑
+# Tab 5: 操作演示 (完全模拟，不调API，不写知识库)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _save_annotation_output(
-    scraped_data: dict,
-    annotation_result: dict,
-    url: str = "",
-) -> str | None:
-    """Save annotation result to outputs/YYYY-MM-DD_platform_id_annotation.json."""
-    platform = scraped_data.get("来源平台", "未知")
-    today = date.today().isoformat()
-    content_id = _extract_content_id(url, platform) if url else "manual"
-    abbrev = PLATFORM_ABBREV.get(platform, "web")
-    filename = f"{today}_{abbrev}_{content_id}_annotation.json"
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    filepath = OUTPUT_DIR / filename
-    payload = {
-        "scraped_data": scraped_data,
-        "annotation_result": annotation_result,
-        "ingested_at": datetime.now().isoformat(),
-    }
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        return filename
-    except OSError:
-        return None
+DEMO_URL = "https://www.youtube.com/watch?v=DIBL7PKlzaU"
+DEMO_SCRAPED = {
+    "原文内容": "标题：Temu Pinduoduo Flooded With Fakes & Trash\n\n描述：From earlier days of Taobao to Pinduoduo and TikTok Shop, counterfeit and inferior products are rampant on Chinese e-commerce platforms. This investigation reveals the scale of the problem.\n\n时长：18分0秒",
+    "来源平台": "YouTube",
+    "发布者类型": "YouTuber: China Observer, 814,000订阅",
+    "互动数据": "播放1,013,104, 点赞14,371, 评论7,626",
+    "发布时间": "2023-11-22",
+    "评论列表": [
+        {"内容": "Temu is literally just a scam marketplace at this point", "点赞": "3200"},
+        {"内容": "I ordered something and never received it, customer service was useless", "点赞": "1800"},
+        {"内容": "The quality is exactly what you pay for - nothing", "点赞": "950"},
+        {"内容": "Finally someone is talking about this! I've been saying this for months", "点赞": "2100"},
+        {"内容": "Pinduoduo has been doing this for years in China, now they export the same model", "点赞": "1500"},
+        {"内容": "My credit card got charged multiple times for one order", "点赞": "870"},
+        {"内容": "It's literally just AliExpress with better marketing", "点赞": "630"},
+    ],
+    "社媒数据": {
+        "作者": "China Observer", "国家": "US", "点赞": 14371, "评论": 7626,
+        "粉丝": 814000, "播放量": 1013104, "时长": "18分0秒",
+        "作者主页": ["https://www.youtube.com/@ChinaObserver"],
+    },
+}
+
+DEMO_ANNOTATION = {
+    "严重度评级": "P1",
+    "分流建议": "立即处理",
+    "情感分析": {"整体情感": "负面"},
+    "摘要": "814K粉YouTuber指控Temu/Pinduoduo充斥假货劣质品，播放超100万，评论区大比例负面，号召抵制",
+    "严重度理由": "中危内容(产品质量指控)×高影响力(814K粉+100万播放)，评论区呈加速传播态势",
+    "分流理由": "涉及品牌核心价值攻击+大规模传播，需立即响应并监测跨平台扩散",
+    "风险标签": ["商品质量", "KOL负面", "大规模传播", "消费者信任"],
+    "舆情分类": ["商品问题", "商品侵权问题"],
+    "评论区分析": {
+        "评论红绿灯": {"红": 5, "黄": 1, "绿": 1},
+        "评论总结": "前排评论压倒性负面，用户指控诈骗/质量低劣/客服无效，出现号召抵制倾向",
+    },
+}
+
+DEMO_SIMILAR = [
+    {"filename": "case-015.md", "title": "Nathan Espinoza指控Temu为间谍软件", "severity": "P0", "hits": 3},
+    {"filename": "case-011.md", "title": "TEMU商品质量+客服投诉", "severity": "P1", "hits": 2},
+    {"filename": "case-018.md", "title": "China Observer深度调查中国电商假货", "severity": "P2", "hits": 2},
+]
+
+with tab5:
+    st.subheader("🎬 操作演示")
+    st.caption("模拟完整 URL 抓取→AI 标注→纠偏流程。全程离线，不调用 API，不写入知识库。")
+
+    demo_step = st.session_state.get("demo_step", 0)
+
+    # Step 0: Input URL
+    if demo_step == 0:
+        st.info("**Step 1/4**: 输入舆情链接")
+        demo_url = st.text_input("粘贴舆情链接", value=DEMO_URL, key="demo_url")
+        if st.button("抓取并标注 →", type="primary", use_container_width=True, key="demo_start"):
+            st.session_state.demo_step = 1
+            st.rerun()
+
+    # Step 1: Simulated scraping
+    elif demo_step == 1:
+        st.info("**Step 2/4**: 正在抓取内容...")
+        with st.spinner("正在抓取 YouTube 内容..."):
+            import time as _time
+            _time.sleep(1.5)
+        st.success("抓取完成！")
+        st.session_state.scraped_data = DEMO_SCRAPED
+        st.session_state.demo_step = 2
+        st.rerun()
+
+    # Step 2: Simulated annotation
+    elif demo_step == 2:
+        st.info("**Step 3/4**: AI 正在分析标注...")
+        progress = st.empty()
+        for pct in (20, 50, 80, 100):
+            import time as _time
+            _time.sleep(0.4)
+            progress.info(f"AI 正在分析... (已生成 {pct * 3} 字符)")
+        progress.empty()
+        st.success("标注完成！")
+        st.session_state.annotation_result = DEMO_ANNOTATION
+        st.session_state._result_source = "demo"
+        st.session_state.demo_step = 3
+        st.rerun()
+
+    # Step 3: Show result + similar cases + correction
+    elif demo_step == 3:
+        st.info("**Step 4/4**: 查看标注结果 & 操作")
+        _render_annotation_result("demo_")
+
+        st.divider()
+        if st.button("🔄 重新演示", use_container_width=True, key="demo_reset"):
+            st.session_state.demo_step = 0
+            st.session_state.annotation_result = None
+            st.session_state.scraped_data = None
+            _clear_correction_widgets()
+            st.rerun()
+
+        st.caption("⚠️ 以上为模拟数据，不会写入知识库。实际操作请在「URL 抓取」标签页进行。")
 
 
-def _do_ingest(scraped_data: dict, annotation_result: dict, url: str = "") -> dict:
-    """Exception-safe wrapper for ingestor.ingest()."""
-    try:
-        return ingest(scraped_data, annotation_result, url)
-    except Exception as e:
-        return {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
-
-
-def _clear_correction_widgets():
-    """Remove stale correction widget state so new annotation values take effect."""
-    for key in list(st.session_state.keys()):
-        if key.startswith("corr_") or key.startswith("tab1_corr_") or key.startswith("tab2_corr_"):
-            del st.session_state[key]
-
-
-def do_scrape(url: str):
-    with st.spinner(f"正在抓取 {url[:60]}..."):
-        data = scrape(url)
-        st.session_state.scraped_data = data
-        st.session_state.annotation_result = None
-        st.session_state.correction_result = None
-        st.session_state.ingest_result = None
-        _clear_correction_widgets()
-    return data
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# 抓取逻辑
 if scrape_btn and url_input.strip():
     do_scrape(url_input.strip())
 
@@ -1161,14 +1347,6 @@ if annotate_scraped_btn and url_input.strip():
     st.session_state.ingest_result = None
     st.session_state.correction_result = None
     st.session_state._annotate_url = url_input.strip()
-    st.rerun()
-
-# 手动标注
-if manual_annotate_btn and manual_content.strip():
-    st.session_state.annotation_result = None
-    st.session_state.ingest_result = None
-    st.session_state.correction_result = None
-    st.session_state._annotate_manual = True
     st.rerun()
 
 # 批量标注

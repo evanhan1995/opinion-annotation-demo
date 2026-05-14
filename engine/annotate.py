@@ -29,7 +29,7 @@ PROJECT_DIR = ENGINE_DIR.parent
 WIKI_DIR = PROJECT_DIR / "wiki"
 CONFIG_PATH = ENGINE_DIR / "config.json"
 
-# 系统提示词固定层（案例层由 _get_case_layers() 动态扫描生成）
+# 系统提示词固定层（案例层由 _get_relevant_case_layers() 按内容相关性动态选择）
 _FIXED_PROMPT_LAYERS = [
     ("core",       "syntheses/opinion-annotation-spec.md"),
     ("concept",    "concepts/severity-rating-matrix.md"),
@@ -39,29 +39,82 @@ _FIXED_PROMPT_LAYERS = [
     ("concept",    "concepts/platform-adaptation.md"),
 ]
 
-MAX_CASE_LAYERS = 15  # Keep prompt size manageable
+MAX_CASE_LAYERS = 5  # Relevance-based: fewer but more targeted cases
 
 
-def _get_case_layers() -> list[tuple[str, str]]:
-    """Scan wiki/cases/ for all case files, newest first."""
+def _tokenize_for_search(text: str) -> list[str]:
+    """Extract search tokens from content for case matching.
+    Chinese bigrams + English words + platform/product names.
+    """
+    tokens = []
+    # English tokens
+    for t in re.findall(r'[a-zA-Z0-9]+', text):
+        t_lower = t.lower()
+        if len(t_lower) >= 2 and t_lower not in ("http", "https", "www", "com"):
+            tokens.append(t_lower)
+    # Chinese bigrams
+    chinese = re.findall(r'[一-鿿]+', text)
+    for segment in chinese:
+        for i in range(len(segment) - 1):
+            tokens.append(segment[i:i+2])
+    return tokens
+
+
+def _score_case_file(filepath: Path, tokens: list[str]) -> int:
+    """Score a case file against search tokens. Higher = more relevant."""
+    try:
+        text = filepath.read_text(encoding="utf-8")
+    except Exception:
+        return 0
+    score = 0
+    text_lower = text.lower()
+    # Title match (first line after frontmatter or frontmatter title)
+    parts = text.split("---", 2)
+    fm = parts[1] if len(parts) >= 3 else ""
+    body = parts[2] if len(parts) >= 3 else text
+    body_lower = body.lower()
+    for token in tokens:
+        if token in fm.lower():
+            score += 3
+        score += body_lower.count(token)
+    return score
+
+
+def _get_relevant_case_layers(user_content: str) -> list[tuple[str, str]]:
+    """Select top cases by content relevance instead of recency."""
     cases_dir = WIKI_DIR / "cases"
-    if not cases_dir.exists():
+    if not cases_dir.exists() or not user_content:
         return []
-    case_files = sorted(
-        cases_dir.glob("case-*.md"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-    return [("case", f"cases/{f.name}") for f in case_files[:MAX_CASE_LAYERS]]
+
+    tokens = _tokenize_for_search(user_content)
+    if not tokens:
+        return []
+
+    scored = []
+    for f in cases_dir.glob("case-*.md"):
+        s = _score_case_file(f, tokens)
+        if s > 0:
+            scored.append((s, f))
+
+    scored.sort(key=lambda x: -x[0])
+    return [("case", f"cases/{f.name}") for _, f in scored[:MAX_CASE_LAYERS]]
 
 
-def _get_prompt_layers() -> list[tuple[str, str]]:
-    """Build prompt layers: fixed concepts + dynamic cases."""
-    return _FIXED_PROMPT_LAYERS + _get_case_layers()
+def _get_prompt_layers(user_content: str = "") -> list[tuple[str, str]]:
+    """Build prompt layers: fixed concepts + content-relevant cases.
+    Falls back to newest-first when no user_content provided.
+    """
+    if user_content:
+        return _FIXED_PROMPT_LAYERS + _get_relevant_case_layers(user_content)
+    return _FIXED_PROMPT_LAYERS + _get_relevant_case_layers("")
 
 PLATFORM_LIST = [
     "小红书", "YouTube", "Instagram", "TikTok", "X", "X (Twitter)", "Twitter",
     "Reddit", "新闻媒体", "论坛", "其他"
+]
+
+CATEGORY_OPTIONS = [
+    "商品问题", "商品侵权问题", "售后问题", "数据泄露", "软件问题", "其他"
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -161,12 +214,17 @@ def load_config():
 # 知识库加载
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_system_prompt() -> tuple[str, dict]:
-    """遍历 wiki/ 目录，按层级组装系统提示词。返回 (完整提示词, 各层级统计)。"""
+def build_system_prompt(user_content: str = "") -> tuple[str, dict]:
+    """遍历 wiki/ 目录，按层级组装系统提示词。返回 (完整提示词, 各层级统计)。
+
+    Args:
+        user_content: 待标注的原文内容，用于相关性案例筛选。
+                      空字符串时使用全量案例（向后兼容 CLI 模式）。
+    """
     layers_content = {}
     stats = {"layers": {}, "total_chars": 0, "total_estimated_tokens": 0}
 
-    for layer_name, rel_path in _get_prompt_layers():
+    for layer_name, rel_path in _get_prompt_layers(user_content):
         file_path = WIKI_DIR / rel_path
         if not file_path.exists():
             stats["layers"][rel_path] = {"status": "missing", "chars": 0, "tokens": 0}
@@ -187,7 +245,7 @@ def build_system_prompt() -> tuple[str, dict]:
     # 组装角色指令
     role_instruction = """你是资深舆情分析师。对每一条输入的舆情内容，严格遵循下方的标注规范和案例库完成：
 
-1. 内容分类 → 2. 多维度情感分析 → 3. 严重度评级(P0-P3) → 4. 分流建议 → 5. 真实性评估 → 6. 摘要+风险标签 → 7. 评论区分析（如有评论数据）
+1. 舆情分类(可多选: 商品问题/商品侵权问题/售后问题/数据泄露/软件问题/其他) → 2. 多维度情感分析 → 3. 严重度评级(P0-P3) → 4. 分流建议 → 5. 真实性评估 → 6. 摘要+风险标签 → 7. 评论区分析（如有评论数据）
 
 核心原则：
 - 宁可误报，不可漏报——对高敏内容保持低阈值
@@ -214,6 +272,18 @@ def build_system_prompt() -> tuple[str, dict]:
   "评论总结": "一句话概括前排评论整体风向（≤60字）"
 }
 ```
+
+## 舆情问题分类
+
+根据原文内容的问题性质，从以下类别中选择适用的分类（可多选）：
+- 商品问题：产品质量缺陷、功能故障、性能不达标、商品与描述不符
+- 商品侵权问题：专利/商标/版权侵权指控、仿冒品、设计抄袭
+- 售后问题：客服体验差、退换货难、维修纠纷、物流配送投诉
+- 数据泄露：用户隐私泄露、数据安全事件、未授权数据收集
+- 软件问题：App/固件Bug、系统稳定性、兼容性问题、更新故障
+- 其他：不属以上类别的舆情内容
+
+在标注 JSON 中增加 "舆情分类" 字段，值为一个数组（可多选）。如不确定，选最接近的一个。
 
 输出纯 JSON，不要包含 markdown 代码块标记，不要包含额外解释文字。"""
 
@@ -307,7 +377,7 @@ def format_user_message(item: dict) -> str:
             lines.append(f"- {text[:200]}{like_str}")
 
     lines.append("")
-    lines.append("请严格按照标注规范的 JSON Schema 输出完整标注结果（含评论区分析）。只输出 JSON，不要包含其他文字。")
+    lines.append("请严格按照标注规范的 JSON Schema 输出完整标注结果（含舆情分类和评论区分析，舆情分类从[商品问题,商品侵权问题,售后问题,数据泄露,软件问题,其他]中选择）。只输出 JSON，不要包含其他文字。")
 
     return "\n".join(lines)
 
@@ -330,6 +400,7 @@ def _annotate_openai_style(user_message: str, system_prompt: str, config: dict) 
             model=config["model"],
             max_tokens=config["max_tokens"],
             temperature=config["temperature"],
+            timeout=90,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -439,6 +510,7 @@ def annotate_one_stream(user_message: str, system_prompt: str, config: dict):
             model=config["model"],
             max_tokens=config["max_tokens"],
             temperature=config["temperature"],
+            timeout=90,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -732,6 +804,40 @@ def diff_annotations(old: dict, new: dict) -> list[dict]:
                        "old_value": f"红{old_tl.get('红','?')}/黄{old_tl.get('黄','?')}/绿{old_tl.get('绿','?')}",
                        "new_value": f"红{new_tl.get('红','?')}/黄{new_tl.get('黄','?')}/绿{new_tl.get('绿','?')}"})
     return diffs
+
+
+def find_similar_cases(tags: list[str], top_k: int = 3) -> list[dict]:
+    """Scan wiki/cases/ for cases with tag overlap. Returns top_k matches sorted by hits."""
+    cases_dir = WIKI_DIR / "cases"
+    if not cases_dir.exists() or not tags:
+        return []
+    tags_lower = [t.lower() for t in tags]
+    scored = []
+    for f in sorted(cases_dir.glob("case-*.md")):
+        try:
+            text = f.read_text(encoding="utf-8")
+            parts = text.split("---", 2)
+            if len(parts) < 3:
+                continue
+            fm = parts[1]
+            m = re.search(r'tags:\s*\[(.*?)\]', fm)
+            if not m:
+                continue
+            case_tags = [t.strip().strip("'\"") for t in m.group(1).split(",")]
+            hits = sum(1 for ct in case_tags if any(tl in ct.lower() for tl in tags_lower))
+            if hits > 0:
+                title_m = re.search(r'title:\s*(.+)', fm)
+                sev_m = re.search(r'severity:\s*(\S+)', fm)
+                scored.append({
+                    "filename": f.name,
+                    "title": title_m.group(1).strip() if title_m else f.stem,
+                    "severity": sev_m.group(1) if sev_m else "?",
+                    "hits": hits,
+                })
+        except Exception:
+            continue
+    scored.sort(key=lambda x: -x["hits"])
+    return scored[:top_k]
 
 
 if __name__ == "__main__":
