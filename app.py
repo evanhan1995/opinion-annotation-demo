@@ -64,9 +64,16 @@ for key, default in [
     ("config", None),
     ("demo_guide_shown", False),
     ("kb_authenticated", False),
+    ("batch_results", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+# Snap deferred annotation requests (cleared old result on previous run, now do actual work)
+_pending_annotate_url = st.session_state.pop("_annotate_url", None)
+_pending_annotate_manual = st.session_state.pop("_annotate_manual", False)
+_pending_batch_urls = st.session_state.pop("_batch_urls", None)
+_patrol_pending = st.session_state.pop("_patrol_pending", False)
 
 # Demo guide: show once per session
 if not st.session_state.demo_guide_shown and not st.session_state.annotation_result:
@@ -94,6 +101,7 @@ with st.sidebar:
             config = load_config()
             system_prompt, kb_stats = build_system_prompt()
             st.session_state.config = config
+            st.session_state.cached_system_prompt = system_prompt
             st.session_state.system_prompt_loaded = True
             st.session_state.kb_stats = kb_stats
 
@@ -110,6 +118,7 @@ with st.sidebar:
             config = load_config()
             system_prompt, kb_stats = build_system_prompt()
             st.session_state.config = config
+            st.session_state.cached_system_prompt = system_prompt
             st.session_state.system_prompt_loaded = True
             st.session_state.kb_stats = kb_stats
             st.rerun()
@@ -192,6 +201,58 @@ with st.sidebar:
                 )
     except Exception:
         pass
+
+    # 巡检监控
+    st.divider()
+    with st.expander("📡 巡检监控", expanded=bool(_patrol_pending)):
+        patrol_urls_file = ENGINE_DIR / "monitored_urls.json"
+        if patrol_urls_file.exists():
+            import json as _json
+            patrol_urls = _json.loads(patrol_urls_file.read_text(encoding="utf-8"))
+            st.caption(f"监控 {len(patrol_urls)} 个链接")
+            if st.button("立即巡检", use_container_width=True, key="patrol_btn"):
+                st.session_state._patrol_pending = True
+                st.rerun()
+            # Execute patrol if pending
+            if _patrol_pending:
+                config = st.session_state.config
+                system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+                results = []
+                p0p1 = 0
+                status = st.empty()
+                for u in patrol_urls:
+                    status.info(f"巡检中: {u[:60]}...")
+                    try:
+                        data = scrape(u)
+                        if data and not data.get("_scrape_error"):
+                            user_msg = format_user_message(data)
+                            result = None
+                            for event in annotate_one_stream(user_msg, system_prompt, config):
+                                if event["type"] == "result":
+                                    result = event["data"]
+                            if result and not result.get("error"):
+                                sev = result.get("严重度评级", "")
+                                if sev in ("P0", "P1"):
+                                    p0p1 += 1
+                                ir = _do_ingest(data, result, u)
+                                results.append({"url": u, "severity": sev, "action": result.get("分流建议", "?"), "summary": result.get("摘要", "")[:60]})
+                    except Exception:
+                        pass
+                status.empty()
+                st.session_state._patrol_result = {"ok": len(results), "total": len(patrol_urls), "p0p1": p0p1, "items": results}
+                st.session_state._needs_rerun = True
+            # Show last patrol result
+            if st.session_state.get("_patrol_result"):
+                pr = st.session_state._patrol_result
+                ok = pr["ok"]; total = pr["total"]; p0p1 = pr["p0p1"]
+                st.caption(f"上次巡检: {ok}/{total} 成功, P0/P1: {p0p1}")
+                if p0p1 > 0:
+                    st.error(f"⚠️ {p0p1} 条高优案例需关注")
+                    for item in pr.get("items", []):
+                        if item.get("severity") in ("P0", "P1"):
+                            st.markdown(f"- **{item['severity']}** {item['summary'][:50]}...")
+        else:
+            st.caption("无监控配置")
 
     # XHS Cookie 状态
     try:
@@ -366,10 +427,17 @@ def _render_annotation_result(key_prefix: str = ""):
             st.text(result["raw_response"][:500])
         return
 
-    # -------- 严重度卡片 --------
+    # -------- P0/P1 醒目告警 --------
     severity = result.get("严重度评级", "?")
     action = result.get("分流建议", "?")
     sentiment = result.get("情感分析", {}).get("整体情感", "?")
+
+    if severity in ("P0", "P1"):
+        banner_type = st.error if severity == "P0" else st.warning
+        banner_type(
+            f"⚠️ **{severity} 高优案例** — 分流建议: {action} | "
+            f"摘要: {result.get('摘要', '')[:80]}..."
+        )
 
     action_colors = {"立即处理": "#dc3545", "持续观察": "#ffc107", "可忽略": "#6c757d", "正面可利用": "#28a745"}
 
@@ -455,6 +523,35 @@ def _render_annotation_result(key_prefix: str = ""):
         st.caption(
             f"Token: 输入 {usage.get('input_tokens','?')} | 输出 {usage.get('output_tokens','?')} | 模型 {meta.get('model','?')}"
         )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 标注历史回溯
+    # ═══════════════════════════════════════════════════════════════════
+    url_for_history = st.session_state.get("scraped_data", {}).get("原文链接", "")
+    if url_for_history:
+        from engine.annotate import find_annotation_history, diff_annotations
+        history = find_annotation_history(url_for_history)
+        if len(history) >= 2:
+            with st.expander(f"📜 标注历史 ({len(history)} 次记录)", expanded=False, key=f"{key_prefix}history_expander"):
+                # Timeline: newest first
+                for h_idx, h in enumerate(history):
+                    a = h["annotation"]
+                    sev = a.get("严重度评级", "?")
+                    act = a.get("分流建议", "?")
+                    sent = a.get("情感分析", {}).get("整体情感", "?")
+                    st.caption(f"**{h['date']}** — {sev} | {act} | {sent}")
+                    # Diff with previous
+                    if h_idx + 1 < len(history):
+                        diffs = diff_annotations(history[h_idx + 1]["annotation"], a)
+                        if diffs:
+                            for d in diffs:
+                                st.markdown(
+                                    f"- {d['label']}: `{d['old_value']}` → **`{d['new_value']}`**"
+                                )
+                        else:
+                            st.caption("  (无变化)")
+                    if h_idx < len(history) - 1:
+                        st.divider()
 
     # ═══════════════════════════════════════════════════════════════════
     # 纠偏功能
@@ -597,6 +694,18 @@ def _render_annotation_result(key_prefix: str = ""):
                 flags.append("新平台覆盖")
             if flags:
                 st.info(f"边界提醒: {'; '.join(flags)}")
+            # Boundary suggestions (draft-PR style)
+            suggestions = ir.get("boundary_suggestions", [])
+            if suggestions:
+                with st.expander("📝 建议更新知识库概念页（Draft PR）", expanded=False):
+                    st.caption("以下修改建议基于本次标注发现的边界盲区自动生成，不会直接写入。请审阅后手动应用。")
+                    for j, s in enumerate(suggestions):
+                        st.markdown(f"**建议 {j+1}**: {s['title']}")
+                        st.caption(f"触发: {s['trigger']} | 目标文件: {s['target_file']} | 区域: {s['section']}")
+                        st.info(s['reason'])
+                        st.markdown(f"```diff\n+ {s['proposed_text']}\n```")
+                        if j < len(suggestions) - 1:
+                            st.divider()
         elif ir["action"] == "skipped":
             st.caption(f"知识库: 已有案例 {ir['case_file']}，跳过自动 Ingest。")
 
@@ -638,6 +747,45 @@ with tab1:
     manual_annotate_btn = st.button("标注", type="primary", use_container_width=True,
                                     disabled=not bool(manual_content.strip()))
 
+    # Deferred manual annotation (old result cleared, now run actual work)
+    if _pending_annotate_manual:
+        item = {
+            "原文内容": manual_content.strip(),
+            "来源平台": manual_platform,
+            "发布者类型": manual_publisher or "未知",
+            "互动数据": manual_engagement or "暂无",
+            "发布时间": "",
+            "原文链接": "",
+        }
+        if manual_comments.strip():
+            item["评论列表"] = [
+                {"内容": line.strip(), "点赞": ""}
+                for line in manual_comments.strip().split("\n")
+                if line.strip()
+            ][:10]
+        st.session_state.scraped_data = item
+        config = st.session_state.config
+        system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+        user_msg = format_user_message(item)
+        progress = st.empty()
+        result = None
+        for event in annotate_one_stream(user_msg, system_prompt, config):
+            if event["type"] == "progress":
+                progress.info(f"AI 正在分析... (已生成 {event['chars']} 字符)")
+            elif event["type"] == "result":
+                result = event["data"]
+                progress.empty()
+        if result is None:
+            result = {"error": True, "message": "流式标注未返回结果"}
+        st.session_state.annotation_result = result
+        st.session_state.correction_result = None
+        st.session_state.ingest_result = None
+        _clear_correction_widgets()
+        if result and not result.get("error"):
+            _save_annotation_output(item, result)
+            st.session_state.ingest_result = _do_ingest(item, result)
+        st.session_state._needs_rerun = True
+
     _render_annotation_result("tab1_")
 
 with tab2:
@@ -654,6 +802,112 @@ with tab2:
     with col2:
         annotate_scraped_btn = st.button("抓取并标注", type="secondary", use_container_width=True,
                                          disabled=not bool(url_input.strip()))
+
+    # Deferred URL annotation (old result cleared, now run actual scrape+annotate)
+    if _pending_annotate_url:
+        data = do_scrape(_pending_annotate_url)
+        if data and not data.get("_scrape_error"):
+            config = st.session_state.config
+            system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+            user_msg = format_user_message(data)
+            progress = st.empty()
+            result = None
+            for event in annotate_one_stream(user_msg, system_prompt, config):
+                if event["type"] == "progress":
+                    progress.info(f"AI 正在分析... (已生成 {event['chars']} 字符)")
+                elif event["type"] == "result":
+                    result = event["data"]
+                    progress.empty()
+            if result is None:
+                result = {"error": True, "message": "流式标注未返回结果"}
+            st.session_state.annotation_result = result
+            st.session_state.correction_result = None
+            st.session_state.ingest_result = None
+            _clear_correction_widgets()
+            if result and not result.get("error"):
+                _save_annotation_output(data, result, _pending_annotate_url)
+                st.session_state.ingest_result = _do_ingest(data, result, _pending_annotate_url)
+            st.session_state._needs_rerun = True
+
+    # --- Batch mode ---
+    st.divider()
+    batch_btn = False
+    batch_urls_text = ""
+    batch_mode = st.checkbox("📦 批量模式", value=False, key="batch_mode_checkbox",
+                             help="粘贴多个URL（每行一个），批量抓取+标注")
+    if batch_mode:
+        batch_urls_text = st.text_area(
+            "粘贴多个URL（每行一个）",
+            placeholder="https://www.youtube.com/watch?v=xxx\nhttps://www.xiaohongshu.com/explore/xxx\nhttps://www.reddit.com/r/...",
+            height=120,
+            key="batch_urls_text",
+        )
+        urls = [u.strip() for u in batch_urls_text.split("\n") if u.strip()]
+        batch_btn = st.button("批量抓取并标注", type="primary", use_container_width=True,
+                              disabled=len(urls) < 2,
+                              key="batch_annotate_btn")
+
+        # Deferred batch processing
+        if _pending_batch_urls:
+            config = st.session_state.config
+            system_prompt = st.session_state.get("cached_system_prompt") or build_system_prompt()[0]
+            results = []
+            status_placeholder = st.empty()
+            progress_bar = st.progress(0)
+            for i, url in enumerate(_pending_batch_urls):
+                status_placeholder.info(f"🔵 正在处理 {i+1}/{len(_pending_batch_urls)}: {url[:60]}...")
+                try:
+                    data = scrape(url)
+                    if data and not data.get("_scrape_error"):
+                        user_msg = format_user_message(data)
+                        result = None
+                        for event in annotate_one_stream(user_msg, system_prompt, config):
+                            if event["type"] == "result":
+                                result = event["data"]
+                        if result and not result.get("error"):
+                            _save_annotation_output(data, result, url)
+                            ir = _do_ingest(data, result, url)
+                            results.append({
+                                "url": url,
+                                "platform": data.get("来源平台", "?"),
+                                "severity": result.get("严重度评级", "?"),
+                                "action": result.get("分流建议", "?"),
+                                "summary": result.get("摘要", "")[:60],
+                                "ingest": ir.get("action", "?"),
+                                "error": None,
+                            })
+                        else:
+                            results.append({"url": url, "error": result.get("message", "标注失败") if result else "无结果"})
+                    else:
+                        results.append({"url": url, "error": data.get("_scrape_error", "抓取失败") if data else "无数据"})
+                except Exception as e:
+                    results.append({"url": url, "error": str(e)})
+                progress_bar.progress((i + 1) / len(_pending_batch_urls))
+            status_placeholder.empty()
+            progress_bar.empty()
+            st.session_state.batch_results = results
+            # Store last single result for _render_annotation_result compatibility
+            if results and not results[-1].get("error"):
+                st.session_state.annotation_result = {"_batch_summary": True}
+            st.session_state._needs_rerun = True
+
+        # Batch results summary
+        if st.session_state.batch_results:
+            br = st.session_state.batch_results
+            ok = sum(1 for r in br if not r.get("error"))
+            fail = len(br) - ok
+            st.divider()
+            st.subheader(f"📊 批量结果: {ok}/{len(br)} 成功" + (f", {fail} 失败" if fail else ""))
+            rows = []
+            for j, r in enumerate(br):
+                if r.get("error"):
+                    rows.append(f"| {j+1} | {r['url'][:50]}... | ❌ | — | — | {r['error'][:40]} |")
+                else:
+                    rows.append(
+                        f"| {j+1} | [{r['platform']}] {r['summary'][:40]}... "
+                        f"| {r['severity']} | {r['action']} | {r['ingest']} |"
+                    )
+            st.markdown("| # | 内容 | 严重度 | 分流 | Ingest |\n|---|------|--------|------|--------|\n" + "\n".join(rows))
 
     _render_annotation_result("tab2_")
 
@@ -895,6 +1149,7 @@ def do_scrape(url: str):
         st.session_state.scraped_data = data
         st.session_state.annotation_result = None
         st.session_state.correction_result = None
+        st.session_state.ingest_result = None
         _clear_correction_widgets()
     return data
 
@@ -902,66 +1157,38 @@ if scrape_btn and url_input.strip():
     do_scrape(url_input.strip())
 
 if annotate_scraped_btn and url_input.strip():
-    data = do_scrape(url_input.strip())
-    if data and not data.get("_scrape_error"):
-        config = st.session_state.config
-        system_prompt, _ = build_system_prompt()
-        user_msg = format_user_message(data)
-        progress = st.empty()
-        result = None
-        for event in annotate_one_stream(user_msg, system_prompt, config):
-            if event["type"] == "progress":
-                progress.info(f"AI 正在分析... (已生成 {event['chars']} 字符)")
-            elif event["type"] == "result":
-                result = event["data"]
-                progress.empty()
-        if result is None:
-            result = {"error": True, "message": "流式标注未返回结果"}
-        st.session_state.annotation_result = result
-        st.session_state.correction_result = None
-        _clear_correction_widgets()
-        if result and not result.get("error"):
-            _save_annotation_output(data, result, url_input.strip())
-            st.session_state.ingest_result = _do_ingest(data, result, url_input.strip())
+    st.session_state.annotation_result = None
+    st.session_state.ingest_result = None
+    st.session_state.correction_result = None
+    st.session_state._annotate_url = url_input.strip()
+    st.rerun()
 
 # 手动标注
 if manual_annotate_btn and manual_content.strip():
-    item = {
-        "原文内容": manual_content.strip(),
-        "来源平台": manual_platform,
-        "发布者类型": manual_publisher or "未知",
-        "互动数据": manual_engagement or "暂无",
-        "发布时间": "",
-        "原文链接": "",
-    }
-    # 评论区
-    if manual_comments.strip():
-        item["评论列表"] = [
-            {"内容": line.strip(), "点赞": ""}
-            for line in manual_comments.strip().split("\n")
-            if line.strip()
-        ][:10]
-
-    st.session_state.scraped_data = item
-    config = st.session_state.config
-    system_prompt, _ = build_system_prompt()
-    user_msg = format_user_message(item)
-    progress = st.empty()
-    result = None
-    for event in annotate_one_stream(user_msg, system_prompt, config):
-        if event["type"] == "progress":
-            progress.info(f"AI 正在分析... (已生成 {event['chars']} 字符)")
-        elif event["type"] == "result":
-            result = event["data"]
-            progress.empty()
-    if result is None:
-        result = {"error": True, "message": "流式标注未返回结果"}
-    st.session_state.annotation_result = result
+    st.session_state.annotation_result = None
+    st.session_state.ingest_result = None
     st.session_state.correction_result = None
-    _clear_correction_widgets()
-    if result and not result.get("error"):
-        _save_annotation_output(item, result)
-        st.session_state.ingest_result = _do_ingest(item, result)
+    st.session_state._annotate_manual = True
+    st.rerun()
+
+# 批量标注
+if batch_btn and batch_urls_text.strip():
+    urls = [u.strip() for u in batch_urls_text.split("\n") if u.strip()]
+    if len(urls) >= 2:
+        st.session_state.annotation_result = None
+        st.session_state.ingest_result = None
+        st.session_state.correction_result = None
+        st.session_state.batch_results = None
+        st.session_state._batch_urls = urls
+        st.rerun()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 显式重跑：确保标注完成后页面刷新到最新结果
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if st.session_state.get("_needs_rerun"):
+    st.session_state._needs_rerun = False
+    st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 页脚

@@ -49,6 +49,7 @@ def ingest(
             return {"action": "skipped", "case_file": existing, "boundary_check": {}}
 
     boundary = _check_boundaries(annotation_result)
+    boundary_suggestions = _generate_boundary_suggestion(boundary, annotation_result, scraped_data)
     case_file = _generate_auto_case(scraped_data, annotation_result, url)
     _update_case_index(case_file, annotation_result, scraped_data)
     _update_global_index(case_file, annotation_result)
@@ -67,6 +68,7 @@ def ingest(
         "action": "case_generated",
         "case_file": case_file,
         "boundary_check": boundary,
+        "boundary_suggestions": boundary_suggestions,
         "linker": linker_result or {},
     }
 
@@ -155,6 +157,75 @@ def _check_boundaries(annotation_result: dict) -> dict:
             result["new_platform"] = True
 
     return result
+
+
+def _generate_boundary_suggestion(
+    boundary: dict,
+    annotation_result: dict,
+    scraped_data: dict,
+) -> list[dict]:
+    """Generate draft-PR-style suggestions for updating severity-rating-matrix.md.
+
+    Returns a list of suggestion dicts, each describing a proposed edit.
+    Empty list if no blind spots found.
+    """
+    suggestions = []
+    severity = annotation_result.get("严重度评级", "")
+    action = annotation_result.get("分流建议", "")
+    platform = scraped_data.get("来源平台", "未知")
+    summary = annotation_result.get("摘要", "")[:60]
+    severity_reason = annotation_result.get("严重度理由", "")[:100]
+
+    if boundary.get("p1_uncovered"):
+        suggestions.append({
+            "target_file": "wiki/concepts/severity-rating-matrix.md",
+            "section": "关键边界 → P0 ↔ P1",
+            "title": f"新增 P1 边界案例: {summary}",
+            "reason": (
+                f"当前案例严重度 P1（{severity_reason}），"
+                f"平台 {platform}，分流建议 {action}。"
+                f"P1 案例在库中稀缺，此案例可丰富 P0↔P1 边界的校准参考。"
+            ),
+            "current_text": "（在「关联案例」区域末尾追加）",
+            "proposed_text": (
+                f"- [[cases/case-NNN|NNN-{summary[:20]}]]："
+                f"{severity_reason[:60]}×{platform}×{action}=P1，扩展P0↔P1边界校准"
+            ),
+            "trigger": "p1_uncovered",
+        })
+
+    if boundary.get("unusual_combo"):
+        combo_reason = f"严重度「{severity}」与分流建议「{action}」的组合"
+        suggestions.append({
+            "target_file": "wiki/concepts/severity-rating-matrix.md",
+            "section": "概述 / 决策逻辑",
+            "title": f"标记异常组合: {severity} + {action}",
+            "reason": (
+                f"{combo_reason}在现有案例库中未出现过。"
+                f"建议人工复核：此组合是否合理？若合理则无需修改矩阵；"
+                f"若不合理则纠偏修正。"
+            ),
+            "current_text": "（无需修改矩阵原文；仅标记为待复核异常）",
+            "proposed_text": f"[待复核] {combo_reason}出现在案例中，建议检查是否需要调整分流规则。",
+            "trigger": "unusual_combo",
+        })
+
+    if boundary.get("new_platform"):
+        suggestions.append({
+            "target_file": "wiki/concepts/platform-adaptation.md",
+            "section": "平台列表",
+            "title": f"新增平台覆盖: {platform}",
+            "reason": (
+                f"「{platform}」在当前案例库索引中首次出现。"
+                f"建议在 platform-adaptation.md 中添加此平台的特性说明，"
+                f"以便 LLM 在标注时考虑该平台的内容形态和用户特征。"
+            ),
+            "current_text": "（在平台适配表中新增一行）",
+            "proposed_text": f"| {platform} | [待补充：内容形态、用户特征、互动模式] |",
+            "trigger": "new_platform",
+        })
+
+    return suggestions
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

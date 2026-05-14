@@ -151,6 +151,7 @@ def load_config():
         "api_style": defaults["api_style"],
         "max_tokens": file_config.get("max_tokens", 4096),
         "temperature": file_config.get("temperature", 0.1),
+        "kb_password": file_config.get("kb_password", ""),
     }
 
     return config
@@ -655,6 +656,82 @@ def main():
     errors = sum(1 for r in results if r.get("error"))
     success = len(results) - errors
     print(f"\n完成: {success}/{len(results)} 条成功" + (f", {errors} 条失败" if errors else ""))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Annotation history & diff
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_OUTPUTS_DIR = PROJECT_DIR / "outputs"
+
+
+def _load_output_file(filepath: Path) -> dict | None:
+    """Load a single annotation output file. Returns None on failure."""
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def find_annotation_history(url: str) -> list[dict]:
+    """Find all annotation outputs for a given URL, newest first.
+
+    Returns list of {file, date, annotation, scraped} dicts.
+    """
+    if not url or not _OUTPUTS_DIR.exists():
+        return []
+    history = []
+    for f in sorted(_OUTPUTS_DIR.glob("*_annotation.json"), reverse=True):
+        payload = _load_output_file(f)
+        if not payload:
+            continue
+        scraped = payload.get("scraped_data", {})
+        annotation = payload.get("annotation_result", {})
+        if scraped.get("原文链接") == url:
+            history.append({
+                "file": f.name,
+                "date": f.stem.split("_")[0] if "_" in f.stem else "",
+                "annotation": {k: v for k, v in annotation.items() if k != "_meta"},
+                "scraped": scraped,
+            })
+    return history
+
+
+_FIELDS_TO_DIFF = [
+    ("严重度评级", "严重度"),
+    ("分流建议", "分流"),
+    ("摘要", "摘要"),
+    ("严重度理由", "严重度理由"),
+    ("分流理由", "分流理由"),
+    ("风险标签", "风险标签"),
+]
+
+
+def diff_annotations(old: dict, new: dict) -> list[dict]:
+    """Compare two annotation results, return list of changed fields.
+
+    Each diff: {field, label, old_value, new_value}
+    """
+    diffs = []
+    for field, label in _FIELDS_TO_DIFF:
+        ov = old.get(field)
+        nv = new.get(field)
+        if ov != nv:
+            diffs.append({"field": field, "label": label, "old_value": ov, "new_value": nv})
+    # Sentiment
+    old_sent = old.get("情感分析", {}).get("整体情感", "")
+    new_sent = new.get("情感分析", {}).get("整体情感", "")
+    if old_sent != new_sent:
+        diffs.append({"field": "情感分析.整体情感", "label": "情感", "old_value": old_sent, "new_value": new_sent})
+    # Comment traffic lights
+    old_tl = old.get("评论区分析", {}).get("评论红绿灯", {})
+    new_tl = new.get("评论区分析", {}).get("评论红绿灯", {})
+    if old_tl != new_tl:
+        diffs.append({"field": "评论区红绿灯", "label": "评论红绿灯",
+                       "old_value": f"红{old_tl.get('红','?')}/黄{old_tl.get('黄','?')}/绿{old_tl.get('绿','?')}",
+                       "new_value": f"红{new_tl.get('红','?')}/黄{new_tl.get('黄','?')}/绿{new_tl.get('绿','?')}"})
+    return diffs
 
 
 if __name__ == "__main__":

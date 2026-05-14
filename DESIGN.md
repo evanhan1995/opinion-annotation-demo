@@ -1,10 +1,10 @@
 # 舆情标注系统 —— 深化设计方案
 
-> 版本: v0.5 | 日期: 2026-05-13 | 状态: Phase 10a 已交付，知识库密码保护已上线
+> 版本: v1.0.0 | 日期: 2026-05-14 | 状态: Phase 11a-d 全部交付，中期里程碑完成
 
 ---
 
-## 1. 当前状态 (v0.5)
+## 1. 当前状态 (v0.5.1)
 
 ### 1.1 已完成
 
@@ -67,7 +67,24 @@
 | 9 | session_state 初始化顺序 | 先 init 再用，demo_guide_shown 纳入统一初始化 |
 | 10 | 知识库密码保护缺失 | 三级密码源：st.secrets → os.getenv → config.json |
 
-### 1.5 架构债务
+### 1.5 性能优化轮次 (2026-05-14)
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 11 | yt-dlp 抓取 7,626 评论视频耗时 171s | `max_comments=["50"]` 限制评论数，降至 3s |
+| 12 | Playwright 无条件 `wait_for_timeout(2-3s)` | 改为 `wait_for_selector` 按内容就绪触发 |
+| 13 | 连续标注第二个 URL 页面残留旧结果 | deferred annotation 模式：按钮先清空再委托下次运行 |
+| 14 | `build_system_prompt()` 每次标注重读 21 文件 | 缓存在 `st.session_state.cached_system_prompt` |
+| 15 | `st.rerun()` 在 button handler 内部双层重跑竞态 | 回退延迟 ingest，改为脚本末 `_needs_rerun` 单次 gate |
+| 16 | 扫地僧不支持跨平台查询 | AGENT_SYSTEM_PROMPT 新增跨平台引导 + `build_agent_context` synthesis 自动展开关联案例 |
+| 17 | 边界盲区仅显示 flag 无行动建议 | `_generate_boundary_suggestion()` 生成 Draft PR 式修改建议，UI 以 diff 格式呈现 |
+| 18 | overview 行用 f-string 硬拼接 | `_parse_row_to_dict()`/`_dict_to_row()` 结构化构建，header 已知常量 |
+| 19 | 只能逐条标注，无批量入口 | Tab2 新增批量模式（checkbox + text_area + 进度条 + 摘要表） |
+| 20 | 无标注历史，无法对比变化 | `find_annotation_history` + `diff_annotations` + 时间线 expander |
+| 21 | 无监控/巡检能力 | `monitored_urls.json` + 侧边栏巡检按钮 + P0/P1 计数 |
+| 22 | P0/P1 案例无醒目提示 | 标注结果顶部 error(红)/warning(黄) 横幅 + 三要素 |
+
+### 1.6 架构债务
 
 | # | 问题 | 严重度 | 计划 |
 |---|------|--------|------|
@@ -87,14 +104,16 @@
 | 8 | 体验优化（流式标注 + Dashboard + 引用可点击 + Demo 引导） |
 | 9 | 可观测性（纠偏率监控 + Cookie 告警 + GitHub Push） |
 | 10a | 跨条目关联（linker.py：bigram 加权评分 + synthesis 自动生成） |
+| 10a-opt | 性能优化（yt-dlp 限评论 50、wait_for_selector、deferred annotation 模式、prompt 缓存、_needs_rerun gate） |
+| 10b | 扫地僧关联查询（AGENT_SYSTEM_PROMPT 跨平台引导 + build_agent_context synthesis 展开 + 表格化输出） |
+| 10c | 边界检查 → Draft PR 建议（`_generate_boundary_suggestion` 三触发 + UI diff 呈现） |
+| 10d | ingestor 表格结构化（`_parse_row_to_dict`/`_dict_to_row` + overview row dict 构建，dimension 保留 `_upsert_dimension_row`） |
+| 11a | 批量导入（多 URL text_area + 进度条 + 摘要表，deferred pattern 复用） |
+| 11b | 标注历史回溯（find_annotation_history + diff_annotations + 时间线 expander） |
+| 11c | 巡检监控（monitored_urls.json 配置 + 侧边栏巡检按钮 + 批量检查 + P0/P1 计数） |
+| 11d | P0/P1 醒目告警（标注结果页红色/黄色横幅 + severity/action/summary 三要素） |
 
-### 🔵 下一步 (5/14 开始)
-
-| # | 任务 | 说明 | 预估 |
-|---|------|------|------|
-| 10b | **扫地僧关联查询** | 优化 agent 查询模板，显式支持"这个事件在哪些平台有讨论？"跨平台查询。linker 的 synthesis 条目已自动纳入 agent 搜索范围，只需添加查询引导 | 30min |
-| 10c | **边界检查 → 自动更新 concepts** | `_check_boundaries()` 发现盲区时自动建议更新 `severity-rating-matrix.md`。生成 draft PR 式的修改建议而非直接改写 | 1h |
-| 10d | **ingestor 表格结构化** | index.md 表格 parse → dict → modify → serialize。必须在案例 >50 前完成，当前 13 案例可暂缓 | 1.5h |
+### 🔵 下一步
 
 ### 🟣 中期 (2-4 周)
 
@@ -140,6 +159,10 @@
 | Phase 7 架构清理先于功能 | 双轨 index 逻辑=定时炸弹 | 2026-05-13 |
 | Linker 仅比较原文内容 | 标注模板共享 boilerplate 导致 97% 噪声 | 2026-05-13 |
 | 知识库密码三级源 | st.secrets(Cloud) → env(CI) → config.json(local)，源码零密码 | 2026-05-13 |
+| yt-dlp 限制评论 50 条 | 7,626 评论视频抓取 171s，不限量=不可用 | 2026-05-14 |
+| Wait-for-selector 替代固定等待 | Playwright `wait_for_timeout` 无条件空等 2-3s | 2026-05-14 |
+| Deferred annotation 模式 | 按钮先清空旧结果再委托下次运行，避免新旧内容混淆 | 2026-05-14 |
+| Streamlit rerun gate 在脚本末 | `st.rerun()` 在 button handler 内会引发双层重跑竞态 | 2026-05-14 |
 
 ---
 

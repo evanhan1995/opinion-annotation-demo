@@ -31,6 +31,12 @@ tags: [yq, case, 索引]
 | [[cases/case-011|011]] | 小红书用户投诉大疆产品质量差，刚买几天就坏，寄回后商家私自换新不给退款，提及12 | P2 | 持续观察 | ? | 质量, 客服 |
 | [[cases/case-012|012]] | 小红书用户(自称电子工程师)投诉DJI Neo 2在16米高空因电池缺陷断电坠毁 | P1 | 立即处理 | 小红书 | 安全, 质量, 客服 |
 | [[cases/case-013|013]] | 1.97万粉科技频道测试DJI OSMO NANO最新固件对过热问题的修复效果， | P2 | 持续观察 | YouTube | 质量, KOL负面 |
+| [[cases/case-014|014]] | 756粉科技频道拆解DJI Osmo Nano与Insta360 GO Ultr | P2 | 持续观察 | YouTube | 质量, KOL负面 |
+| [[cases/case-015|015]] | 208万粉YouTuber发布shorts视频揭露TEMU真相，引用CNN报道指 | P1 | 立即处理 | YouTube | 安全, 合规, KOL负面 |
+| [[cases/case-016|016]] | 167万粉YouTuber发布视频标题称TEMU为'最卑鄙公司'，播放131万， | P1 | 立即处理 | YouTube | KOL负面, 大规模传播 |
+| [[cases/case-017|017]] | 69.1万粉YouTuber发布视频指控TEMU虚假宣传免费赠品，规则不透明，播 | P2 | 持续观察 | YouTube | 合规, KOL负面 |
+| [[cases/case-018|018]] | 51.7万粉电商KOL发布TEMU客观评测，涵盖安全性、退货政策、优缺点等，播放 | P2 | 持续观察 | YouTube | 客服 |
+| [[cases/case-019|019]] | 28.3万粉科技频道发布shorts视频指控TEMU为诈骗，描述称揭露欺诈行为， | P2 | 持续观察 | YouTube | KOL负面 |
 
 ---
 
@@ -40,15 +46,15 @@ tags: [yq, case, 索引]
 | 严重度 | 案例 |
 |--------|------|
 | P0 | [[cases/case-001|001]] |
-| P1 | [[cases/case-010|010]], [[cases/case-012|012]] |
-| P2 | [[cases/case-002|002]], [[cases/case-007|007]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-011|011]], [[cases/case-013|013]] |
+| P1 | [[cases/case-010|010]], [[cases/case-012|012]], [[cases/case-015|015]], [[cases/case-016|016]] |
+| P2 | [[cases/case-002|002]], [[cases/case-007|007]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-011|011]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]] |
 | P3 | [[cases/case-003|003]], [[cases/case-004|004]], [[cases/case-005|005]], [[cases/case-006|006]] |
 
 ### 按分流建议
 | 建议 | 案例 |
 |------|------|
-| 立即处理 | [[cases/case-001|001]], [[cases/case-007|007]], [[cases/case-012|012]] |
-| 持续观察 | [[cases/case-002|002]], [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-010|010]], [[cases/case-011|011]], [[cases/case-013|013]] |
+| 立即处理 | [[cases/case-001|001]], [[cases/case-007|007]], [[cases/case-012|012]], [[cases/case-015|015]], [[cases/case-016|016]] |
+| 持续观察 | [[cases/case-002|002]], [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-010|010]], [[cases/case-011|011]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]] |
 | 可忽略 | [[cases/case-003|003]], [[cases/case-006|006]] |
 | 正面可利用 | [[cases/case-004|004]] |
 
@@ -59,7 +65,7 @@ tags: [yq, case, 索引]
 | Reddit | [[cases/case-002|002]], [[cases/case-010|010]] |
 | TikTok | [[cases/case-004|004]] |
 | 小红书 | [[cases/case-007|007]], [[cases/case-011|011]], [[cases/case-012|012]] |
-| YouTube | [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-013|013]] |
+| YouTube | [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-015|015]], [[cases/case-016|016]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]] |
 
 ---
 

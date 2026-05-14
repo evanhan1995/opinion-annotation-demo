@@ -126,6 +126,7 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
         "no_warnings": True,
         "getcomments": True,
         "extract_flat": False,
+        "extractor_args": {"youtube": {"max_comments": ["50"]}},
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -208,7 +209,10 @@ def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         page.goto(old_url, timeout=timeout, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
+        try:
+            page.wait_for_selector("a.title", timeout=5000)
+        except Exception:
+            pass
 
         title_el = page.query_selector("a.title")
         title = title_el.inner_text() if title_el else ""
@@ -277,7 +281,10 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        try:
+            page.wait_for_selector("article[data-testid='tweet']", timeout=8000)
+        except Exception:
+            pass
 
         tweet_el = page.query_selector("article div[data-testid='tweetText']")
         tweet_text = tweet_el.inner_text() if tweet_el else ""
@@ -344,7 +351,10 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
+        try:
+            page.wait_for_selector("article, main, div.post-content, div.content", timeout=5000)
+        except Exception:
+            page.wait_for_timeout(1000)
 
         title = page.title() or ""
         body = ""
