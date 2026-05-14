@@ -423,7 +423,9 @@ SCRAPERS = {
 
 def fetch_youtube_subtitles(url: str) -> str:
     """Fetch auto-captions / subtitles from a YouTube video. Returns text or empty string."""
-    import yt_dlp, urllib.request, json as _json
+    import json as _json
+    from urllib.request import urlopen
+    import yt_dlp
     ydl_opts = {
         "quiet": True, "no_warnings": True, "extract_flat": False,
         "writesubtitles": True, "writeautomaticsub": True,
@@ -436,7 +438,7 @@ def fetch_youtube_subtitles(url: str) -> str:
         for e in subs.get(lang, []):
             if e.get("ext") in ("json3", "srv1", "srv2", "srv3"):
                 try:
-                    resp = urllib.request.urlopen(e["url"], timeout=15)
+                    resp = urlopen(e["url"], timeout=15)
                     events = _json.loads(resp.read()).get("events", [])
                     lines = []
                     for ev in events[:500]:
