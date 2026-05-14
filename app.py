@@ -81,7 +81,7 @@ _patrol_pending = st.session_state.pop("_patrol_pending", False)
 if not st.session_state.demo_guide_shown and not st.session_state.annotation_result:
     with st.expander("👋 快速入门指南", expanded=True):
         st.markdown("""
-        1. **加载 Demo** → 点击左侧「📝 手动输入」标签页中的「📋 加载 Demo 示例」
+        1. **操作演示** → 点击左侧「📝 手动输入」标签页中的「📋 操作演示示例」
         2. **AI 标注** → 点击「标注」按钮，等待 AI 分析结果
         3. **查看案例** → 切换到「📚 知识库」标签页，从左侧选择案例查看
         4. **尝试纠偏** → 在标注结果底部的「纠偏」表单中修改 AI 判断，保存后自动生成校准案例
@@ -1293,7 +1293,7 @@ with tab5:
         demo_url = st.text_input("粘贴舆情链接", value=DEMO_URL, key="demo_url")
         if st.button("抓取并标注 →", type="primary", use_container_width=True, key="demo_start"):
             st.session_state.demo_step = 1
-            st.rerun()
+            st.session_state._needs_rerun = True
 
     # Step 1: Simulated scraping
     elif demo_step == 1:
@@ -1304,7 +1304,7 @@ with tab5:
         st.success("抓取完成！")
         st.session_state.scraped_data = DEMO_SCRAPED
         st.session_state.demo_step = 2
-        st.rerun()
+        st.session_state._needs_rerun = True
 
     # Step 2: Simulated annotation
     elif demo_step == 2:
@@ -1319,7 +1319,7 @@ with tab5:
         st.session_state.annotation_result = DEMO_ANNOTATION
         st.session_state._result_source = "demo"
         st.session_state.demo_step = 3
-        st.rerun()
+        st.session_state._needs_rerun = True
 
     # Step 3: Show result + similar cases + correction
     elif demo_step == 3:
@@ -1332,7 +1332,7 @@ with tab5:
             st.session_state.annotation_result = None
             st.session_state.scraped_data = None
             _clear_correction_widgets()
-            st.rerun()
+            st.session_state._needs_rerun = True
 
         st.caption("⚠️ 以上为模拟数据，不会写入知识库。实际操作请在「URL 抓取」标签页进行。")
 
