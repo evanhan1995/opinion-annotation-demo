@@ -81,11 +81,11 @@ _patrol_pending = st.session_state.pop("_patrol_pending", False)
 if not st.session_state.demo_guide_shown and not st.session_state.annotation_result:
     with st.expander("👋 快速入门指南", expanded=True):
         st.markdown("""
-        1. **操作演示** → 点击左侧「📝 手动输入」标签页中的「📋 操作演示示例」
-        2. **AI 标注** → 点击「标注」按钮，等待 AI 分析结果
-        3. **查看案例** → 切换到「📚 知识库」标签页，从左侧选择案例查看
-        4. **尝试纠偏** → 在标注结果底部的「纠偏」表单中修改 AI 判断，保存后自动生成校准案例
-        5. **问答检索** → 切换到「💬 扫地僧」标签页，向知识库提问
+        1. **操作演示** → 切换到「🎬 操作演示」，查看离线模拟全流程
+        2. **URL 抓取** → 切换到「🔗 URL 抓取」，粘贴 YouTube / 小红书链接
+        3. **查看知识库** → 切换到「📚 知识库」浏览案例和作者
+        4. **手工录入** → 切换到「📝 手工录入」手动填写内容并保存
+        5. **扫地僧** → 切换到「💬 扫地僧」向知识库提问
         """)
         if st.button("知道了，开始使用", key="dismiss_guide"):
             st.session_state.demo_guide_shown = True
