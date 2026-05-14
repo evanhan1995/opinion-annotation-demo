@@ -2,7 +2,77 @@
 title: 操作日志
 type: log
 created: 2026-05-11
-updated: 2026-05-11
+updated: 2026-05-14
+---
+
+## 2026-05-14 全 session 开发日志
+
+### 版本演进: v0.5 → v1.2.0
+
+#### 性能优化 (10a-opt)
+- yt-dlp `max_comments=["50"]`: 7,626评论视频 171s→3s
+- Playwright `wait_for_selector` 替代 `wait_for_timeout(2-3s)`
+- Deferred annotation 模式: 按钮清空→下次运行执行→`_needs_rerun` gate
+- 系统 prompt 缓存 + 后续改为相关性案例筛选 (42K→10K tokens, -77%)
+- `do_scrape` 等函数移至 `st.tabs()` 前定义, 修复 NameError
+
+#### 10b: 扫地僧跨平台查询
+- AGENT_SYSTEM_PROMPT 新增跨平台引导 + `build_agent_context` synthesis 展开
+
+#### 10c: 边界 Draft PR 建议
+- `_generate_boundary_suggestion()` 三触发 (p1_uncovered/unusual_combo/new_platform)
+- UI diff 格式呈现
+
+#### 10d: index 表格结构化
+- `_parse_row_to_dict()`/`_dict_to_row()` overview row dict 构建
+- dimension 保留 `_upsert_dimension_row`
+
+#### 11a: 批量导入
+- checkbox + text_area + 进度条 + 摘要表, deferred pattern 复用
+
+#### 11b: 标注历史回溯
+- `find_annotation_history` + `diff_annotations` + 时间线 expander
+
+#### 11c: 巡检监控
+- `monitored_urls.json` + 侧边栏巡检按钮 + P0/P1 计数
+
+#### 11d: P0/P1 醒目告警
+- 标注结果页 error(红)/warning(黄) 横幅
+
+#### 15a: 舆情分类系统 (6 类多选)
+- CATEGORY_OPTIONS 常量 + prompt 两步指令 (前置+末尾双冗余)
+- UI 彩色标签 + 纠偏 multiselect + frontmatter `categories:` + 按分类索引
+- prompt 指令从末尾移至首步修复 LLM 空输出 `[]`
+
+#### 15b: 社媒数据拆分
+- scraper 4 平台输出 `社媒数据` 字典 (作者/国家/点赞/评论/粉丝/播放量/时长/作者主页)
+- XHS `ip_location`→国家, `likes×80`→估算播放量
+- YouTube 新增时长 (duration) + 描述 1000→2000 字符
+
+#### 15c: 作者库
+- `wiki/authors/` 新目录 + `_upsert_author()` 自动生成+跨平台合并
+- case↔author 双向链接 (frontmatter `author:`)
+- Agent 搜索 + Tab3 导航覆盖 authors/
+
+#### YouTube AI 分析 + URL 校验
+- `fetch_youtube_subtitles()` 按需字幕提取 (不默认下载, 加速40%)
+- "🎬 AI 视频内容分析" 按钮 + "📥 下载字幕 TXT"
+- `find_similar_cases()` 按 tag 命中数匹配 top 3 近似舆情
+- Tab2 URL 校验: 非 YouTube/小红书 → 警告 + 按钮禁用
+- 社媒卡增平台/发布时间/时长展示
+
+#### Bug 修复
+- `load_config()` 遗漏 `kb_password` 字段 → 知识库密码保护失效
+- f-string `\"` 转义 → SyntaxError
+- `st.rerun()` 在 button handler 内 → 双层重跑竞态 (回退+gate 模式)
+- wikilink `\|` 转义警告
+
+### 关键指标
+- 代码: 5,232 行 (10 引擎 + 1 UI + 1 测试)
+- 测试: 21/21 全通过
+- 资产: 27 案例 + 5 概念 + 5 作者 + 16 outputs
+- Prompt: 42K→10K tokens (-77%)
+- 标注速度: ~23s→~10s (YouTube, 因字幕按需)
 tags: [log, audit]
 ---
 
@@ -195,4 +265,100 @@ tags: [log, audit]
 - **分流建议**：持续观察
 - **风险标签**：KOL负面
 - **来源链接**：https://www.youtube.com/shorts/5qO_HjPxKOI
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-14 15:51 | 自动Ingest | 生成 [[cases/case-020]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P0
+- **分流建议**：立即处理
+- **风险标签**：合规, 安全, 大规模传播
+- **来源链接**：https://www.youtube.com/watch?v=EalvgelUGf0
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-14 15:54 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.youtube.com/watch?v=EalvgelUGf0
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-14 15:55 | 自动Ingest | 生成 [[cases/case-021]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P1
+- **分流建议**：立即处理
+- **风险标签**：质量, 客服, 物流
+- **来源链接**：https://www.youtube.com/watch?v=7kIJxo7XBLY
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-14 15:57 | 纠偏 | 生成 [[cases/case-022]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：significant
+- **来源链接**：https://www.youtube.com/watch?v=7kIJxo7XBLY
+- **说明**：用户修正了 AI 标注结果，差异等级为 significant。新案例已写入 cases/。
+
+### 2026-05-14 19:13 | 自动Ingest | 生成 [[cases/case-023]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：质量, 客服
+- **来源链接**：https://www.xiaohongshu.com/explore/6994a42e000000001a02c333?xsec_token=ABfjKyA2SDnOfAsI4E2dzFW1KPTe-Iz0tRtZab0NSsAPM=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-14 19:22 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.xiaohongshu.com/explore/6994a42e000000001a02c333?xsec_token=ABfjKyA2SDnOfAsI4E2dzFW1KPTe-Iz0tRtZab0NSsAPM=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-14 19:22 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.xiaohongshu.com/explore/6994a42e000000001a02c333?xsec_token=ABfjKyA2SDnOfAsI4E2dzFW1KPTe-Iz0tRtZab0NSsAPM=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-14 20:09 | 自动Ingest | 生成 [[cases/case-024]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P1
+- **分流建议**：立即处理
+- **风险标签**：质量, 合规, KOL负面
+- **来源链接**：https://www.youtube.com/watch?v=DIBL7PKlzaU
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-14 21:00 | 纠偏 | 生成 [[cases/case-025]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：significant
+- **来源链接**：https://www.youtube.com/watch?v=DIBL7PKlzaU
+- **说明**：用户修正了 AI 标注结果，差异等级为 significant。新案例已写入 cases/。
+
+### 2026-05-14 21:46 | 自动Ingest | 生成 [[cases/case-026]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P1
+- **分流建议**：立即处理
+- **风险标签**：质量, 竞品攻击, KOL负面
+- **来源链接**：https://www.youtube.com/watch?v=vFII7t9FtO8
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-14 21:48 | 纠偏 | 生成 [[cases/(无新案例)]]
+
+- **操作类型**：人工纠偏 → 生成校准案例
+- **差异等级**：minor
+- **来源链接**：https://www.youtube.com/watch?v=vFII7t9FtO8
+- **说明**：用户修正了 AI 标注结果，差异等级为 minor。新案例已写入 cases/。
+
+### 2026-05-14 21:54 | 自动Ingest | 生成 [[cases/case-027]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：客服, 质量
+- **来源链接**：https://www.xiaohongshu.com/explore/69fd59740000000010001c00?xsec_token=AByfWcg1eWWdWot40FUHsWNZMf4rAdp4xmQ4fDyhue8Ws=&xsec_source=pc_search&source=web_user_page
 - **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。

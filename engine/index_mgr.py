@@ -167,6 +167,7 @@ def update_case_index(
     title: str,
     platform: str = "?",
     tags: list = None,
+    categories: list = None,
     source: str = "auto_ingest",
 ) -> None:
     """Add new case to wiki/cases/index.md overview table + all dimension indexes.
@@ -245,6 +246,8 @@ def update_case_index(
             section = "action"
         elif s.startswith("### 按平台"):
             section = "platform"
+        elif s.startswith("### 按分类"):
+            section = "category"
         elif s.startswith("## "):
             section = None
 
@@ -254,6 +257,9 @@ def update_case_index(
             new_lines[i] = _upsert_dimension_row(line, action, case_ref)
         elif section == "platform":
             new_lines[i] = _upsert_dimension_row(line, platform, case_ref)
+        elif section == "category":
+            for cat in (categories or []):
+                new_lines[i] = _upsert_dimension_row(line, cat, case_ref)
 
     with open(INDEX_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines))

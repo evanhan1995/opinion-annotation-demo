@@ -22,6 +22,95 @@ GLOBAL_INDEX_PATH = WIKI_DIR / "index.md"
 LOG_PATH = WIKI_DIR / "log.md"
 RAW_CASES_DIR = PROJECT_DIR / "raw" / "cases"
 RAW_ARCHIVE_DIR = PROJECT_DIR / "raw" / "archive"
+AUTHORS_DIR = WIKI_DIR / "authors"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Author library
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _slugify(name: str) -> str:
+    """Convert author name to filename-safe slug."""
+    import re as _re
+    slug = name.lower().strip()
+    slug = _re.sub(r'[^a-z0-9一-鿿]+', '-', slug)
+    return slug.strip('-')
+
+
+def _upsert_author(social: dict, platform: str) -> str | None:
+    """Create or update an author page. Returns filename (e.g. 'author-xxx.md')."""
+    author_name = social.get("作者", "").strip()
+    if not author_name:
+        return None
+
+    slug = _slugify(author_name)
+    filename = f"author-{slug}.md"
+    filepath = AUTHORS_DIR / filename
+    today = date.today().isoformat()
+    homepages = list(social.get("作者主页", []))
+
+    merged_platforms = [platform]
+    merged_homepages = list(homepages)
+    existing_cases = []
+
+    if filepath.exists():
+        text = filepath.read_text(encoding="utf-8")
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            fm = parts[1]
+            # Merge platforms
+            pm = re.search(r'platforms:\s*\[(.*?)\]', fm)
+            if pm:
+                for p in re.split(r'[,\s]+', pm.group(1)):
+                    p = p.strip().strip("'\"")
+                    if p and p not in merged_platforms:
+                        merged_platforms.append(p)
+            # Merge homepages
+            for m in re.finditer(r'^\s*-\s*(.+)$', fm, re.MULTILINE):
+                hp = m.group(1).strip()
+                if hp and hp not in merged_homepages:
+                    merged_homepages.append(hp)
+            # Preserve existing related_cases
+            cm = re.search(r'related_cases:\s*\n((?:\s*-.*\n?)*)', fm)
+            if cm:
+                existing_cases = re.findall(r'\[\[([^\]]+)\]\]', cm.group(1))
+    else:
+        AUTHORS_DIR.mkdir(parents=True, exist_ok=True)
+
+    hp_lines = "\n".join(f"  - {h}" for h in merged_homepages if h) if merged_homepages else "  - []"
+    platforms_str = ", ".join(merged_platforms)
+    cases_lines = "\n".join(f"  - \"[[{c}]]\"" for c in existing_cases) if existing_cases else "  - []"
+    content = f"""---
+title: {author_name}
+type: author
+created: {today}
+platforms: [{platforms_str}]
+followers: {social.get('粉丝', 0)}
+homepages:
+{hp_lines}
+related_cases:
+{cases_lines}
+tags: [author, {platforms_str}]
+---
+
+# {author_name}
+
+## 基本信息
+
+- **平台**: {platforms_str}
+- **粉丝**: {social.get('粉丝', 0):,}
+- **国家**: {social.get('国家') or '未知'}
+
+## 主页
+
+{chr(10).join(f'- {h}' for h in merged_homepages if h) if merged_homepages else '- (暂无)'}
+
+## 关联案例
+
+{chr(10).join(f'- [[{c}]]' for c in existing_cases) if existing_cases else '（案例入库时自动追加）'}
+"""
+    filepath.write_text(content, encoding="utf-8")
+    return filename
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -50,7 +139,11 @@ def ingest(
 
     boundary = _check_boundaries(annotation_result)
     boundary_suggestions = _generate_boundary_suggestion(boundary, annotation_result, scraped_data)
-    case_file = _generate_auto_case(scraped_data, annotation_result, url)
+    # Author library: upsert before case so we can backlink
+    social = scraped_data.get("社媒数据", {})
+    platform = scraped_data.get("来源平台", "未知")
+    author_file = _upsert_author(social, platform) if social else None
+    case_file = _generate_auto_case(scraped_data, annotation_result, url, author_file)
     _update_case_index(case_file, annotation_result, scraped_data)
     _update_global_index(case_file, annotation_result)
     _append_ingest_log(case_file, annotation_result, url)
@@ -236,6 +329,7 @@ def _generate_auto_case(
     scraped_data: dict,
     annotation_result: dict,
     url: str = "",
+    author_file: str = None,
 ) -> str:
     """Generate auto-ingest case page. Returns filename (e.g. 'case-008.md')."""
     case_id = _get_next_case_id()
@@ -268,6 +362,9 @@ def _generate_auto_case(
         boundary_lines.append("- 此案例落在现有规则覆盖范围内，无明显边界异常。")
 
     url_line = f"url: {url}" if url else ""
+    cats = annotation_result.get("舆情分类", [])
+    cat_line = f"categories: [{', '.join(cats)}]" if cats else ""
+    author_line = f"author: \"[[authors/{author_file}]]\"" if author_file else ""
     content = f"""---
 title: 案例{case_id.split('-')[1]}: {title_text}
 type: case
@@ -277,6 +374,8 @@ action: {action}
 platform: {platform}
 source: auto_ingest
 {url_line}
+{cat_line}
+{author_line}
 tags: [auto_ingest, {severity}]
 ---
 
@@ -337,6 +436,7 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
     platform = (scraped_data or {}).get("来源平台", annotation_result.get("来源平台", "?"))
     title = annotation_result.get("摘要", "auto-ingest")[:40]
     tags = annotation_result.get("风险标签", [])
+    categories = annotation_result.get("舆情分类", [])
 
     update_case_index(
         new_filename=new_filename,
@@ -345,6 +445,7 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
         title=title,
         platform=platform,
         tags=tags,
+        categories=categories,
         source="auto_ingest",
     )
 

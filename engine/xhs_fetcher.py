@@ -406,6 +406,11 @@ def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
     user = note.get("user", {})
     nickname = user.get("nickname", "")
     user_id = user.get("user_id", "")
+    # XHS note detail API may include follower count; keys vary by API version
+    followers = (
+        user.get("follower_count") or user.get("followers") or
+        user.get("fans") or user.get("fans_count") or 0
+    )
 
     interact = note.get("interact_info", {})
     liked = interact.get("liked_count", "0")
@@ -444,6 +449,8 @@ def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
         if text:
             comments.append({"内容": text.strip(), "点赞": str(like_count)})
 
+    likes_int = int(liked) if str(liked).isdigit() else 0
+    estimated_views = likes_int * 80 if likes_int > 0 else None
     return {
         "原文内容": "\n".join(content_parts),
         "来源平台": "小红书",
@@ -452,6 +459,16 @@ def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
         "发布时间": publish_time,
         "原文链接": url,
         "评论列表": comments,
+        "社媒数据": {
+            "作者": nickname or user_id,
+            "国家": ip_location,
+            "点赞": likes_int,
+            "评论": int(commented) if str(commented).isdigit() else 0,
+            "粉丝": int(followers) if str(followers).isdigit() else (followers if isinstance(followers, int) else 0),
+            "播放量": estimated_views,
+            "作者主页": [f"https://www.xiaohongshu.com/user/profile/{user_id}"],
+            "_播放量估算": True,
+        },
         "_meta": {
             "note_id": note_id,
             "nickname": nickname,

@@ -37,6 +37,14 @@ tags: [yq, case, 索引]
 | [[cases/case-017|017]] | 69.1万粉YouTuber发布视频指控TEMU虚假宣传免费赠品，规则不透明，播 | P2 | 持续观察 | YouTube | 合规, KOL负面 |
 | [[cases/case-018|018]] | 51.7万粉电商KOL发布TEMU客观评测，涵盖安全性、退货政策、优缺点等，播放 | P2 | 持续观察 | YouTube | 客服 |
 | [[cases/case-019|019]] | 28.3万粉科技频道发布shorts视频指控TEMU为诈骗，描述称揭露欺诈行为， | P2 | 持续观察 | YouTube | KOL负面 |
+| [[cases/case-020|020]] | YouTuber Lindey Glenn（48.2万粉）发布视频，指控Temu | P0 | 立即处理 | YouTube | 合规, 安全, 大规模传播 |
+| [[cases/case-021|021]] | ITV《This Morning》节目质疑Temu低价模式是否可信，邀请调查记者 | P1 | 立即处理 | YouTube | 质量, 客服, 物流 |
+| [[cases/case-022|022]] | YouTuber Lindey Glenn（48.2万粉）发布视频，指控Temu | P0 | 立即处理 | — | 纠偏案例 | 2026-05-14 |
+| [[cases/case-023|023]] | 用户投诉在TEMU购买布包却收到假花，且申诉仅获半额退款，表达强烈不满 | P2 | 持续观察 | 小红书 | 质量, 客服 |
+| [[cases/case-024|024]] | YouTuber China Observer（81.4万粉）发布视频指控Tem | P1 | 立即处理 | YouTube | 质量, 合规, KOL负面 |
+| [[cases/case-025|025]] | 用户投诉在TEMU购买布包却收到假花，且申诉仅获半额退款，表达强烈不满 | P2 | 持续观察 | — | 纠偏案例 | 2026-05-14 |
+| [[cases/case-026|026]] | 74万粉YouTuber发布15分钟视频，将Temu定性为噩梦和廉价仿冒品网站， | P1 | 立即处理 | YouTube | 质量, 竞品攻击, KOL负面 |
+| [[cases/case-027|027]] | 小红书用户发帖避雷Temu，称商家疯狂辱骂顾客及其全家，但无具体证据，互动量低 | P2 | 持续观察 | 小红书 | 客服, 质量 |
 
 ---
 
@@ -45,16 +53,16 @@ tags: [yq, case, 索引]
 ### 按严重度
 | 严重度 | 案例 |
 |--------|------|
-| P0 | [[cases/case-001|001]] |
-| P1 | [[cases/case-010|010]], [[cases/case-012|012]], [[cases/case-015|015]], [[cases/case-016|016]] |
-| P2 | [[cases/case-002|002]], [[cases/case-007|007]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-011|011]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]] |
+| P0 | [[cases/case-001|001]], [[cases/case-020|020]], [[cases/case-022|022]] |
+| P1 | [[cases/case-010|010]], [[cases/case-012|012]], [[cases/case-015|015]], [[cases/case-016|016]], [[cases/case-021|021]], [[cases/case-024|024]], [[cases/case-026|026]] |
+| P2 | [[cases/case-002|002]], [[cases/case-007|007]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-011|011]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]], [[cases/case-023|023]], [[cases/case-025|025]], [[cases/case-027|027]] |
 | P3 | [[cases/case-003|003]], [[cases/case-004|004]], [[cases/case-005|005]], [[cases/case-006|006]] |
 
 ### 按分流建议
 | 建议 | 案例 |
 |------|------|
-| 立即处理 | [[cases/case-001|001]], [[cases/case-007|007]], [[cases/case-012|012]], [[cases/case-015|015]], [[cases/case-016|016]] |
-| 持续观察 | [[cases/case-002|002]], [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-010|010]], [[cases/case-011|011]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]] |
+| 立即处理 | [[cases/case-001|001]], [[cases/case-007|007]], [[cases/case-012|012]], [[cases/case-015|015]], [[cases/case-016|016]], [[cases/case-020|020]], [[cases/case-021|021]], [[cases/case-022|022]], [[cases/case-024|024]], [[cases/case-026|026]] |
+| 持续观察 | [[cases/case-002|002]], [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-010|010]], [[cases/case-011|011]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]], [[cases/case-023|023]], [[cases/case-025|025]], [[cases/case-027|027]] |
 | 可忽略 | [[cases/case-003|003]], [[cases/case-006|006]] |
 | 正面可利用 | [[cases/case-004|004]] |
 
@@ -64,8 +72,8 @@ tags: [yq, case, 索引]
 | X (Twitter) | [[cases/case-001|001]], [[cases/case-003|003]], [[cases/case-006|006]] |
 | Reddit | [[cases/case-002|002]], [[cases/case-010|010]] |
 | TikTok | [[cases/case-004|004]] |
-| 小红书 | [[cases/case-007|007]], [[cases/case-011|011]], [[cases/case-012|012]] |
-| YouTube | [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-015|015]], [[cases/case-016|016]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]] |
+| 小红书 | [[cases/case-007|007]], [[cases/case-011|011]], [[cases/case-012|012]], [[cases/case-023|023]], [[cases/case-027|027]] |
+| YouTube | [[cases/case-005|005]], [[cases/case-008|008]], [[cases/case-009|009]], [[cases/case-013|013]], [[cases/case-014|014]], [[cases/case-015|015]], [[cases/case-016|016]], [[cases/case-017|017]], [[cases/case-018|018]], [[cases/case-019|019]], [[cases/case-020|020]], [[cases/case-021|021]], [[cases/case-024|024]], [[cases/case-026|026]] |
 
 ---
 

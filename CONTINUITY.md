@@ -32,16 +32,14 @@
 
 ## 当前版本
 
-**v1.0.0** — Phase 11a-d 全部交付。中期里程碑完成。
-- ~4,200 行 Python，10 个源文件 + 382 行测试（21 个全通过）
-- 13 个 Wiki 案例（P0×1, P1×2, P2×6, P3×4），全严重度覆盖
-- 流式标注 + 侧边栏 Dashboard + 扫地僧引用可点击 + Demo 引导
-- 知识库密码保护（`st.secrets.KB_PASSWORD` → `KB_PASSWORD` env → `config.json` kb_password）
-- 跨条目关联检测（linker.py：bigram 加权评分，自动 synthesis 生成）
-- 反馈回路闭合（新案例 → PROMPT_LAYERS → 下次标注可用）
-- yt-dlp 评论限制 50 条（7,626 评论视频 171s → 3s）
-- Deferred annotation 模式（新 URL 提交立即清空旧结果）
-- 系统 prompt 缓存 + wait_for_selector 替代固定等待
+**v1.2.0** — Phase 15a-c + AI分析 + URL校验全部交付。
+- 5,232 行 Python，11 源文件 + 21/21 测试全通过
+- 27 个 Wiki 案例 + 5 作者页 + 5 概念页 + 16 outputs
+- YouTube: 标题+描述(2000字)+时长+评论+社媒数据+按需字幕+AI深度分析
+- 小红书: xhshow API + Cookie三级兜底(缓存→弹窗→按钮) + 播放量估算
+- 舆情分类(6类多选) + 近似舆情匹配(top 3 tag命中)
+- 批量导入 + 标注历史 diff + 巡检监控 + P0/P1告警 + URL校验
+- 知识库密码三级保护 + Deferred annotation + 相关性案例筛选(42K→10K tokens)
 
 ---
 
@@ -121,7 +119,7 @@ app.py 标注按钮点击
 6. **案例数量**：13 个。新增后检查 index.md 三维索引完整性。
 7. **st.rerun() 反模式**：绝对不要在 button handler 内调用 `st.rerun()`。使用 deferred pattern：按钮只做清空+设 flag+rerun，实际工作在下次运行的 tab 块内完成。最终 rerun 用脚本末 `_needs_rerun` gate。
 8. **yt-dlp 评论上限**：`max_comments=["50"]` 已配置在 scraper.py 中，不要删除此限制。
-9. **系统 prompt 缓存**：`st.session_state.cached_system_prompt` 在侧边栏加载时写入，button handler 用 `.get()` 带 fallback。
+9. **系统 prompt 按需构建**：已移除 `cached_system_prompt`。每次标注调用 `build_system_prompt(content)[0]`，按内容相关性选 top-5 案例（10ms 构建，9.8K tokens）。
 
 ## 项目当前状态 (v1.0.0)
 

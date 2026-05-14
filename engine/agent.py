@@ -109,7 +109,7 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
         _score_and_add(f, "")
 
     # Subdirectory pages
-    for dirname in ("concepts", "entities", "sources", "syntheses", "cases"):
+    for dirname in ("concepts", "entities", "sources", "syntheses", "cases", "authors"):
         dir_path = WIKI_DIR / dirname
         if not dir_path.exists():
             continue
@@ -187,6 +187,7 @@ def build_agent_context(results: list[dict], expand_syntheses: bool = True) -> s
             "sources": "来源",
             "syntheses": "规范",
             "cases": "案例",
+            "authors": "作者",
         }.get(r["dirname"], r["type"])
 
         fm = r.get("frontmatter", {})
