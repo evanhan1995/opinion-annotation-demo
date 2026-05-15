@@ -96,21 +96,22 @@ if not st.session_state.demo_guide_shown and not st.session_state.annotation_res
 render_sidebar(_patrol_pending)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tab 布局
+# Tab 布局 — uses st.radio (key="active_tab") instead of st.tabs() so the
+# selected tab survives st.rerun(). st.tabs() loses tab state on full-script
+# rerun because its internal widget key is opaque; radio stores it explicitly.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📝 手工录入", "🔗 URL 抓取", "📚 知识库", "💬 扫地僧", "🎬 操作演示"
-])
+TAB_LABELS = ["📝 手工录入", "🔗 URL 抓取", "📚 知识库", "💬 扫地僧", "🎬 操作演示"]
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = TAB_LABELS[0]
 
-with tab1:
-    render_tab1()
+active_tab = st.radio(
+    "", TAB_LABELS, horizontal=True, label_visibility="collapsed", key="active_tab"
+)
 
-with tab2:
-    render_tab2(_pending_annotate_url, _pending_batch_urls)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tab 3: 知识库浏览器
+# Tab 3 helper functions (defined before if/elif chain to avoid syntax errors)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_kb_password() -> str:
@@ -144,7 +145,17 @@ def _kb_password_form():
             st.error("密码错误，请重试")
 
 
-with tab3:
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tab routing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if active_tab == TAB_LABELS[0]:
+    render_tab1()
+
+elif active_tab == TAB_LABELS[1]:
+    render_tab2(_pending_annotate_url, _pending_batch_urls)
+
+elif active_tab == TAB_LABELS[2]:
     st.subheader("📚 知识库浏览器")
 
     pages = _load_wiki_pages()
@@ -225,7 +236,7 @@ with tab3:
 # Tab 4: 扫地僧 Agent
 # ═══════════════════════════════════════════════════════════════════════════════
 
-with tab4:
+elif active_tab == TAB_LABELS[3]:
     st.subheader("💬 扫地僧 —— 知识库智能助手")
     st.caption("基于 Wiki 知识库回答舆情标注相关问题。引用来源均来自知识库页面。")
 
@@ -283,7 +294,7 @@ with tab4:
             st.session_state.agent_messages = []
             st.rerun()
 
-with tab5:
+elif active_tab == TAB_LABELS[4]:
     render_tab5()
 
 # ═══════════════════════════════════════════════════════════════════════════════
