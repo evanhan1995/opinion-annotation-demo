@@ -168,48 +168,15 @@ class XhsApiClient:
         self.client = httpx.Client(timeout=30)
 
     def _sign_headers(self, uri: str, data: dict, method: str = "POST") -> dict:
-        """Generate signed headers for API request."""
-        is_post = method.upper() == "POST"
-        if is_post:
-            headers = self.xhshow.sign_headers_post(
-                uri=uri, cookies=self.cookie_str, payload=data,
+        """Generate signed headers via xhshow standard API (unified GET/POST)."""
+        if method.upper() == "POST":
+            return self.xhshow.sign_headers(
+                method="POST", uri=uri, cookies=self.cookie_str, payload=data,
             )
         else:
-            # GET: build content string
-            if data:
-                params = []
-                for k, v in data.items():
-                    v_str = ",".join(str(x) for x in v) if isinstance(v, list) else str(v) if v is not None else ""
-                    params.append(f"{k}={quote(v_str, safe=',')}")
-                content_string = f"{uri}?{'&'.join(params)}"
-            else:
-                content_string = uri
-
-            import hashlib
-            cookie_dict = self.xhshow._parse_cookies(self.cookie_str)
-            a1_value = cookie_dict.get("a1", "")
-            ts = time.time()
-            d_value = hashlib.md5(content_string.encode("utf-8")).hexdigest()
-            payload_array = self.xhshow.crypto_processor.build_payload_array(
-                d_value, a1_value, "xhs-pc-web", content_string, ts,
+            return self.xhshow.sign_headers(
+                method="GET", uri=uri, cookies=self.cookie_str, params=data,
             )
-            xor_result = self.xhshow.crypto_processor.bit_ops.xor_transform_array(payload_array)
-            config = self.xhshow.config
-            x3_b64 = self.xhshow.crypto_processor.b64encoder.encode_x3(
-                xor_result[:config.PAYLOAD_LENGTH]
-            )
-            sig_data = config.SIGNATURE_DATA_TEMPLATE.copy()
-            sig_data["x3"] = config.X3_PREFIX + x3_b64
-            x_s = config.XYS_PREFIX + self.xhshow.crypto_processor.b64encoder.encode(
-                json.dumps(sig_data, separators=(",", ":"), ensure_ascii=False)
-            )
-            headers = {
-                "x-s": x_s,
-                "x-s-common": self.xhshow.sign_xs_common(cookie_dict),
-                "x-t": str(self.xhshow.get_x_t(ts)),
-                "x-b3-traceid": self.xhshow.get_b3_trace_id(),
-            }
-        return headers
 
     def _get(self, uri: str, params: dict) -> dict:
         headers = self._sign_headers(uri, params, "GET")

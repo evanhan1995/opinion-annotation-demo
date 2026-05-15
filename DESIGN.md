@@ -1,6 +1,6 @@
 # 舆情标注系统 —— 深化设计方案
 
-> 版本: v1.5.0 | 日期: 2026-05-15 | 状态: Phase 17a+17b 完成，17c 进行中
+> 版本: v1.6.0 | 日期: 2026-05-15 | 状态: Phase 17a+17b+17c 全部完成
 
 ---
 
@@ -34,7 +34,7 @@
 | `ui/tab2_url.py` | 180 | Tab2 URL 抓取 + 批量模式 + deferred annotation |
 | `ui/tab5_demo.py` | 118 | Tab5 操作演示 |
 | `engine/annotate.py` | 657 | LLM 标注引擎（含流式 `annotate_one_stream`） |
-| `engine/xhs_fetcher.py` | 471 | 小红书 API 客户端 |
+| `engine/xhs_fetcher.py` | 445 | 小红书 API 客户端（Phase 17c: GET/POST 签名统一走 xhshow 标准 API） |
 | `engine/scraper.py` | 412 | 多平台抓取调度 |
 | `engine/ingestor.py` | 326 | 自动 Ingest 管线 + linker 挂钩 |
 | `engine/agent.py` | 282 | 扫地僧问答引擎 |
@@ -42,7 +42,7 @@
 | `engine/linker.py` | 236 | 跨条目关联检测（bigram 加权评分） |
 | `engine/index_mgr.py` | 136 | 共享 index 更新逻辑 |
 | `tests/test_core.py` | 382 | 21 个核心测试 |
-| `tests/test_app_state.py` | 298 | 27 个集成测试（deferred flow + tab 隔离 + I/O） |
+| `tests/test_app_state.py` | 375 | 32 个集成测试（deferred flow + tab 隔离 + I/O + XHS 签名回归） |
 | **总计** | **4,952** | |
 
 ### 1.3 知识库资产
@@ -120,6 +120,7 @@
 | 11d | P0/P1 醒目告警（标注结果页红色/黄色横幅 + severity/action/summary 三要素） |
 | 17a | app.py 拆分（302行入口 + ui/shared.py + sidebar.py + tab1/2/5，纯移动零变更） |
 | 17b | 测试补盲（27 集成测试：deferred flow + tab 隔离 + 文件 I/O + ingest 错误处理） |
+| 17c | XHS Cookie 攻坚（GET 签名统一走 xhshow 标准 API，补 x-xray-traceid，5 回归测试） |
 
 ### 🔵 下一步 (5/15 优先)
 
@@ -127,7 +128,7 @@
 |---|------|------|------|
 | ~~**17a**~~ | ~~**app.py 拆分**~~ | ✅ 完成：302行入口 + ui/shared(594) + sidebar(158) + tab1(117) + tab2(180) + tab5(118) | ~~半天~~ |
 | ~~**17b**~~ | ~~**测试补盲**~~ | ✅ 完成：27 集成测试（6 测试类），48/48 全通过 | ~~半天~~ |
-| **17c** | **XHS Cookie 攻坚** | 定位 xhshow 签名需要的完整 Cookie 集合，对比扫码实际获取，补提取逻辑或换 API 端点 | 一天 |
+| ~~**17c**~~ | ~~**XHS Cookie 攻坚**~~ | ✅ 完成：签名统一走 xhshow 标准 API（GET 补 x-xray-traceid），29行→2行，5 回归测试 | ~~一天~~ |
 
 ### 🟡 增量提质
 
