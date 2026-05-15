@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """Tab 5: Demo walkthrough — simulated full pipeline, no API calls, no writes.
 
-Uses @st.fragment to isolate demo reruns from outer tab state.
-st.rerun(scope="fragment") within the fragment won't re-execute st.tabs(),
-so the active tab selection is always preserved.
+Tab selection is preserved via st.radio(key="active_tab") in app.py.
+st.rerun() is safe because the active tab key is explicit in session_state.
 """
 
 import streamlit as st
@@ -63,16 +62,15 @@ DEMO_SIMILAR = [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def render_tab5():
-    """Render the demo walkthrough tab (Tab 5)."""
+    """Render the demo walkthrough tab (Tab 5).
+
+    Uses st.rerun() for step transitions. Safe because app.py now uses
+    st.radio(key="active_tab") instead of st.tabs() — the active tab is
+    stored explicitly in session_state and survives all reruns.
+    """
+
     st.subheader("🎬 操作演示")
     st.caption("模拟完整 URL 抓取→AI 标注→纠偏流程。全程离线，不调用 API，不写入知识库。")
-    _demo_steps()
-
-
-@st.fragment
-def _demo_steps():
-    """Demo step state machine — runs as a fragment so st.rerun(scope="fragment")
-    doesn't re-execute st.tabs() in app.py. Tab selection stays on Tab 5."""
 
     demo_step = st.session_state.get("demo_step", 0)
 
@@ -82,7 +80,7 @@ def _demo_steps():
         st.text_input("粘贴舆情链接", value=DEMO_URL, key="demo_url")
         if st.button("抓取并标注 →", type="primary", use_container_width=True, key="demo_start"):
             st.session_state.demo_step = 1
-            st.rerun(scope="fragment")
+            st.rerun()
 
     # Step 1: Simulated scraping
     elif demo_step == 1:
@@ -93,7 +91,7 @@ def _demo_steps():
         st.success("抓取完成！")
         st.session_state.scraped_data = DEMO_SCRAPED
         st.session_state.demo_step = 2
-        st.rerun(scope="fragment")
+        st.rerun()
 
     # Step 2: Simulated annotation
     elif demo_step == 2:
@@ -108,7 +106,7 @@ def _demo_steps():
         st.session_state.annotation_result = DEMO_ANNOTATION
         st.session_state._result_source = "demo"
         st.session_state.demo_step = 3
-        st.rerun(scope="fragment")
+        st.rerun()
 
     # Step 3: Show result + similar cases + correction
     elif demo_step == 3:
@@ -121,6 +119,6 @@ def _demo_steps():
             st.session_state.annotation_result = None
             st.session_state.scraped_data = None
             _clear_correction_widgets()
-            st.rerun(scope="fragment")
+            st.rerun()
 
         st.caption("⚠️ 以上为模拟数据，不会写入知识库。实际操作请在「URL 抓取」标签页进行。")
