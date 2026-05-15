@@ -1,6 +1,6 @@
 # 舆情标注系统 —— 深化设计方案
 
-> 版本: v1.3.0 | 日期: 2026-05-15 | 状态: 下一阶段 Phase 17a~17c 就绪待启动
+> 版本: v1.4.0 | 日期: 2026-05-15 | 状态: Phase 17a 完成，17b 进行中
 
 ---
 
@@ -27,7 +27,12 @@
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `app.py` | 962 | Streamlit Web UI（Dashboard + 流式标注 + 引用可点击 + 密码保护） |
+| `app.py` | 302 | Streamlit Web UI 入口（Tab3 知识库 + Tab4 扫地僧内联） |
+| `ui/shared.py` | 594 | 共享渲染函数（_render_annotation_result + 辅助函数 + Wiki 浏览器） |
+| `ui/sidebar.py` | 158 | 侧边栏（系统状态 + Dashboard + 巡检 + XHS Cookie） |
+| `ui/tab1_manual.py` | 117 | Tab1 手工录入 |
+| `ui/tab2_url.py` | 180 | Tab2 URL 抓取 + 批量模式 + deferred annotation |
+| `ui/tab5_demo.py` | 118 | Tab5 操作演示 |
 | `engine/annotate.py` | 657 | LLM 标注引擎（含流式 `annotate_one_stream`） |
 | `engine/xhs_fetcher.py` | 471 | 小红书 API 客户端 |
 | `engine/scraper.py` | 412 | 多平台抓取调度 |
@@ -37,7 +42,7 @@
 | `engine/linker.py` | 236 | 跨条目关联检测（bigram 加权评分） |
 | `engine/index_mgr.py` | 136 | 共享 index 更新逻辑 |
 | `tests/test_core.py` | 382 | 21 个核心测试 |
-| **总计** | **4,147** | |
+| **总计** | **4,654** | |
 
 ### 1.3 知识库资产
 
@@ -89,7 +94,7 @@
 | # | 问题 | 严重度 | 计划 |
 |---|------|--------|------|
 | 1 | ingestor 字符串拼接维护 Markdown 表格 | 中 | 案例 >50 时结构化（当前 13 无需） |
-| 2 | app.py 近千行单文件 | 低 | 后续按模块拆分 |
+| 2 | ~~app.py 近千行单文件~~ | ~~低~~ | ✅ Phase 17a 完成：302 行入口 + 5 个 ui/ 模块 |
 
 ---
 
@@ -112,12 +117,13 @@
 | 11b | 标注历史回溯（find_annotation_history + diff_annotations + 时间线 expander） |
 | 11c | 巡检监控（monitored_urls.json 配置 + 侧边栏巡检按钮 + 批量检查 + P0/P1 计数） |
 | 11d | P0/P1 醒目告警（标注结果页红色/黄色横幅 + severity/action/summary 三要素） |
+| 17a | app.py 拆分（302行入口 + ui/shared.py + sidebar.py + tab1/2/5，纯移动零变更） |
 
 ### 🔵 下一步 (5/15 优先)
 
 | # | 任务 | 说明 | 预估 |
 |---|------|------|------|
-| **17a** | **app.py 拆分** | 按 Tab 拆为 app.py(~200行) + ui/sidebar.py + ui/shared.py + ui/tab1~5.py | 半天 |
+| ~~**17a**~~ | ~~**app.py 拆分**~~ | ✅ 完成：302行入口 + ui/shared(594) + sidebar(158) + tab1(117) + tab2(180) + tab5(118) | ~~半天~~ |
 | **17b** | **测试补盲** | Deferred flow、Tab 隔离、来源过滤、手工录入保存 → 集成测试 | 半天 |
 | **17c** | **XHS Cookie 攻坚** | 定位 xhshow 签名需要的完整 Cookie 集合，对比扫码实际获取，补提取逻辑或换 API 端点 | 一天 |
 
