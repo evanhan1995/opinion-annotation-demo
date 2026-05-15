@@ -85,7 +85,7 @@ def render_tab5():
         st.success("抓取完成！")
         st.session_state.scraped_data = DEMO_SCRAPED
         st.session_state.demo_step = 2
-        st.session_state._needs_rerun = True
+        st.rerun()
 
     # Step 2: Simulated annotation
     elif demo_step == 2:
@@ -100,7 +100,7 @@ def render_tab5():
         st.session_state.annotation_result = DEMO_ANNOTATION
         st.session_state._result_source = "demo"
         st.session_state.demo_step = 3
-        st.session_state._needs_rerun = True
+        st.rerun()
 
     # Step 3: Show result + similar cases + correction
     elif demo_step == 3:
