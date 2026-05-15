@@ -418,3 +418,47 @@ class TestManualEntryDataAssembly:
         has_data = any(["author_name", "", "", "", "", "https://home.page"])
         social = {"作者": "author_name"} if has_data else None
         assert social is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 7: XHS API client — signing header completeness (Phase 17c regression)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestXhsSigningHeaders:
+    """Verify XhsApiClient._sign_headers uses xhshow standard API consistently."""
+
+    COOKIE_STR = "a1=test_a1_5" + "0" * 47 + "; web_session=test_session; webId=test_webid"
+
+    @pytest.fixture
+    def client(self):
+        from engine.xhs_fetcher import XhsApiClient
+        c = XhsApiClient(self.COOKIE_STR)
+        yield c
+        c.close()
+
+    REQUIRED_HEADERS = {"x-s", "x-s-common", "x-t", "x-b3-traceid", "x-xray-traceid"}
+
+    def test_post_signing_has_all_headers(self, client):
+        headers = client._sign_headers("/api/test", {"key": "value"}, "POST")
+        assert self.REQUIRED_HEADERS.issubset(set(headers.keys()))
+
+    def test_get_signing_has_all_headers(self, client):
+        headers = client._sign_headers("/api/test", {"key": "value"}, "GET")
+        assert self.REQUIRED_HEADERS.issubset(set(headers.keys()))
+
+    def test_get_signing_includes_xray_traceid(self, client):
+        """Regression: before Phase 17c fix, GET was missing x-xray-traceid."""
+        headers = client._sign_headers("/api/test", {}, "GET")
+        assert "x-xray-traceid" in headers
+        assert len(headers["x-xray-traceid"]) > 0
+
+    def test_get_without_params_works(self, client):
+        """GET with empty params should still produce valid headers."""
+        headers = client._sign_headers("/api/sns/web/v2/comment/page", {}, "GET")
+        assert self.REQUIRED_HEADERS.issubset(set(headers.keys()))
+
+    def test_post_and_get_produce_different_signatures(self, client):
+        """Same URI with different methods should produce different x-s values."""
+        post_h = client._sign_headers("/api/test", {"k": "v"}, "POST")
+        get_h = client._sign_headers("/api/test", {"k": "v"}, "GET")
+        assert post_h["x-s"] != get_h["x-s"]
