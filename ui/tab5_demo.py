@@ -74,7 +74,7 @@ def render_tab5():
         demo_url = st.text_input("粘贴舆情链接", value=DEMO_URL, key="demo_url")
         if st.button("抓取并标注 →", type="primary", use_container_width=True, key="demo_start"):
             st.session_state.demo_step = 1
-            st.session_state._needs_rerun = True
+            st.rerun()
 
     # Step 1: Simulated scraping
     elif demo_step == 1:
@@ -113,6 +113,6 @@ def render_tab5():
             st.session_state.annotation_result = None
             st.session_state.scraped_data = None
             _clear_correction_widgets()
-            st.session_state._needs_rerun = True
+            st.rerun()
 
         st.caption("⚠️ 以上为模拟数据，不会写入知识库。实际操作请在「URL 抓取」标签页进行。")
