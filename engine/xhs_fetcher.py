@@ -268,48 +268,188 @@ class XhsApiClient:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# XHS-Downloader metadata adapter (cookie-free, curl_cffi TLS impersonation)
+# Replaces xhshow-based metadata extraction. Comment fetching still uses xhshow.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_XHS_DOWNLOADER_PATH = "D:/Claude code/Github skills/XHS-Downloader"
+_XHS_DL_AVAILABLE = False
+if Path(_XHS_DOWNLOADER_PATH).exists():
+    import sys as _sys
+    if _XHS_DOWNLOADER_PATH not in _sys.path:
+        _sys.path.insert(0, _XHS_DOWNLOADER_PATH)
+    try:
+        from source import XHS as _XHS
+        _XHS_DL_AVAILABLE = True
+    except ImportError:
+        pass
+
+
+def _fetch_xhs_metadata_via_downloader(url: str) -> dict | None:
+    """Fetch XHS note metadata using XHS-Downloader (cookie-free). Returns None on failure."""
+    if not _XHS_DL_AVAILABLE:
+        return None
+    import asyncio as _asyncio
+
+    async def _extract():
+        parsed = parse_note_url(url)
+        async with _XHS(
+            work_path=str(ENGINE_DIR / ".xhs_dl_cache"),
+            image_download=False,
+            video_download=False,
+            download_record=False,
+            language="zh_CN",
+        ) as xhs:
+            return await xhs.extract(url, download=False)
+
+    try:
+        results = _asyncio.run(_extract())
+    except Exception:
+        return None
+    if not results:
+        return None
+    return results[0] if isinstance(results, list) else results
+
+
+def _format_xhs_dl_metadata(raw: dict, note_id: str) -> dict:
+    """Convert XHS-Downloader output to project's standardized schema.
+
+    Information-theoretic design ([[feedback_phase17a_app_split.md]]):
+    Single-channel transform: XHS-DL dict → standardized metadata dict.
+    No information is added or removed — only key names are mapped.
+    """
+    title = raw.get("作品标题", "") or ""
+    desc = raw.get("作品描述", "") or ""
+    nickname = raw.get("作者昵称", "") or ""
+    user_id = raw.get("作者ID", "") or ""
+
+    tags_str = raw.get("作品标签", "")
+    tags = [t.strip() for t in tags_str.split() if t.strip()]
+
+    liked = raw.get("点赞数量", "0")
+    collected = raw.get("收藏数量", "0")
+    commented = raw.get("评论数量", "0")
+    shared = raw.get("分享数量", "0")
+
+    publish_time = ""
+    raw_time = raw.get("发布时间", "")
+    if raw_time:
+        publish_time = raw_time.replace("_", " ")[:10]
+
+    content_parts = [f"标题：{title}"]
+    if desc:
+        content_parts.append(f"\n正文：{desc[:1500]}")
+    if tags:
+        content_parts.append(f"\n标签：{' '.join('#' + t for t in tags)}")
+
+    likes_int = int(liked) if str(liked).isdigit() else 0
+    estimated_views = likes_int * 80 if likes_int > 0 else None
+
+    return {
+        "metadata": {
+            "title": title,
+            "desc": desc,
+            "nickname": nickname,
+            "user_id": user_id,
+            "tags": tags,
+            "liked": liked,
+            "collected": collected,
+            "commented": commented,
+            "shared": shared,
+            "publish_time": publish_time,
+        },
+        "原文内容": "\n".join(content_parts),
+        "发布者类型": f"小红书用户: {nickname} ({user_id})" if nickname else f"小红书用户: {user_id}",
+        "互动数据": f"点赞{liked}, 收藏{collected}, 评论{commented}, 分享{shared}",
+        "发布时间": publish_time,
+        "社媒数据": {
+            "作者": nickname or user_id,
+            "国家": "",
+            "点赞": likes_int,
+            "评论": int(commented) if str(commented).isdigit() else 0,
+            "粉丝": 0,
+            "播放量": estimated_views,
+            "作者主页": [f"https://www.xiaohongshu.com/user/profile/{user_id}"],
+            "_播放量估算": True,
+        },
+        "_meta": {
+            "note_id": note_id,
+            "nickname": nickname,
+            "source": "xhs-downloader",
+        },
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Public API
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
-    """Fetch XHS note detail + comments. Returns standardized dict for annotation engine.
+    """Fetch XHS note detail + comments.
 
-    Args:
-        url: XHS note URL (must contain xsec_token)
-        max_comments: Maximum number of comments to fetch
+    Uses XHS-Downloader (cookie-free) for metadata when available,
+    falls back to xhshow-based API client.
 
-    Returns:
-        dict with keys: 原文内容, 来源平台, 发布者类型, 互动数据, 发布时间, 原文链接, 评论列表
+    Returns standardized dict for annotation engine.
     """
-    # Parse URL
     parsed = parse_note_url(url)
     note_id = parsed["note_id"]
     xsec_token = parsed["xsec_token"]
     xsec_source = parsed["xsec_source"]
 
-    # Get cookies (auto-bootstrap if cache is empty)
+    # ── Channel 1: Metadata via XHS-Downloader (cookie-free) ──
+    note = None
+    dl_meta = _fetch_xhs_metadata_via_downloader(url)
+    if dl_meta:
+        formatted = _format_xhs_dl_metadata(dl_meta, note_id)
+        # Fetch comments via xhshow (still needs cookie)
+        comments_raw = _fetch_comments_only(note_id, xsec_token, max_comments)
+        return _assemble_result(formatted, url, comments_raw)
+
+    # ── Fallback: xhshow API (needs cookie) ──
+    note, comments_raw, error = _fetch_via_xhshow(
+        note_id, xsec_token, xsec_source, url, max_comments
+    )
+    if error:
+        return error
+    if not note:
+        return _error_result("笔记不存在或无法访问", url, "Note not found or access denied")
+    return _assemble_result(
+        _format_xhshow_metadata(note, note_id), url, comments_raw
+    )
+
+
+def _fetch_comments_only(note_id: str, xsec_token: str, max_comments: int) -> list:
+    """Fetch comments via xhshow API. Returns empty list if cookie unavailable."""
+    cookie_str = get_cookie_string(allow_bootstrap=False)
+    if not cookie_str:
+        return []
+    try:
+        client = XhsApiClient(cookie_str)
+        try:
+            return client.get_note_comments(note_id, xsec_token, max_comments)
+        finally:
+            client.close()
+    except Exception:
+        return []
+
+
+def _fetch_via_xhshow(note_id, xsec_token, xsec_source, url, max_comments):
+    """Fetch note + comments via xhshow API. Returns (note, comments, error_dict)."""
     cookie_str = get_cookie_string(allow_bootstrap=True)
     if not cookie_str:
-        return {
-            "原文内容": "[小红书登录未完成 - 请在弹出的浏览器窗口中扫码登录]",
-            "来源平台": "小红书",
-            "发布者类型": "",
-            "互动数据": "",
-            "发布时间": "",
-            "原文链接": url,
-            "评论列表": [],
-            "_scrape_error": "Login required. A browser window should open for QR code scanning. If not, click '刷新小红书登录' in sidebar.",
-        }
-
-    # Fetch data
+        return None, [], _error_result(
+            "小红书登录未完成", url,
+            "Login required. A browser window should open for QR code scanning.",
+        )
     client = XhsApiClient(cookie_str)
     try:
         note = client.get_note_detail(note_id, xsec_token, xsec_source)
         comments_raw = client.get_note_comments(note_id, xsec_token, max_comments)
+        return note, comments_raw, None
     except Exception as e:
         err_msg = str(e)
         if "XHS_COOKIE_EXPIRED" in err_msg:
-            # Delete expired cookie, bootstrap fresh, retry once
             if COOKIE_FILE.exists():
                 COOKIE_FILE.unlink()
             cookie_str = bootstrap_cookies(force=True)
@@ -319,66 +459,31 @@ def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
                 try:
                     note = client.get_note_detail(note_id, xsec_token, xsec_source)
                     comments_raw = client.get_note_comments(note_id, xsec_token, max_comments)
+                    return note, comments_raw, None
                 except Exception as e2:
-                    err_msg2 = str(e2)
-                    return {
-                        "原文内容": f"[抓取失败: {err_msg2}]\n\n请尝试在侧边栏点击'刷新小红书登录'后重试。",
-                        "来源平台": "小红书",
-                        "发布者类型": "未知",
-                        "互动数据": "",
-                        "发布时间": "",
-                        "原文链接": url,
-                        "评论列表": [],
-                        "_scrape_error": err_msg2,
-                    }
-            else:
-                return {
-                    "原文内容": "[小红书Cookie已过期 - 请在弹出的浏览器窗口中扫码登录后重试]",
-                    "来源平台": "小红书",
-                    "发布者类型": "",
-                    "互动数据": "",
-                    "发布时间": "",
-                    "原文链接": url,
-                    "评论列表": [],
-                    "_scrape_error": "Cookie expired and re-login failed. Try clicking '刷新小红书登录' in sidebar.",
-                }
-        return {
-            "原文内容": f"[抓取失败: {err_msg}]",
-            "来源平台": "小红书",
-            "发布者类型": "未知",
-            "互动数据": "",
-            "发布时间": "",
-            "原文链接": url,
-            "评论列表": [],
-            "_scrape_error": err_msg,
-        }
+                    return None, [], _error_result(
+                        f"抓取失败: {e2}", url, str(e2),
+                    )
+            return None, [], _error_result(
+                "小红书Cookie已过期", url,
+                "Cookie expired and re-login failed.",
+            )
+        return None, [], _error_result(f"抓取失败: {err_msg}", url, err_msg)
     finally:
         client.close()
 
-    if not note:
-        return {
-            "原文内容": f"[抓取失败: 笔记不存在或无法访问]",
-            "来源平台": "小红书",
-            "发布者类型": "未知",
-            "互动数据": "",
-            "发布时间": "",
-            "原文链接": url,
-            "评论列表": [],
-            "_scrape_error": "Note not found or access denied",
-        }
 
-    # Extract fields
+def _format_xhshow_metadata(note: dict, note_id: str) -> dict:
+    """Convert xhshow API note dict to standardized metadata dict."""
     title = note.get("title", "") or note.get("display_title", "")
     desc = note.get("desc", "")
     user = note.get("user", {})
     nickname = user.get("nickname", "")
     user_id = user.get("user_id", "")
-    # XHS note detail API may include follower count; keys vary by API version
     followers = (
         user.get("follower_count") or user.get("followers") or
         user.get("fans") or user.get("fans_count") or 0
     )
-
     interact = note.get("interact_info", {})
     liked = interact.get("liked_count", "0")
     collected = interact.get("collected_count", "0")
@@ -396,36 +501,31 @@ def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
             publish_time = str(time_ms)
 
     tags = []
-    tag_list = note.get("tag_list", [])
-    if tag_list:
-        for t in tag_list:
-            tags.append(t.get("name", ""))
+    for t in note.get("tag_list", []):
+        if t.get("name"):
+            tags.append(t["name"])
 
-    # Build content
     content_parts = [f"标题：{title}"]
     if desc:
         content_parts.append(f"\n正文：{desc[:1500]}")
     if tags:
-        content_parts.append(f"\n标签：{' '.join(['#' + t for t in tags])}")
-
-    # Build comments
-    comments = []
-    for c in comments_raw:
-        text = c.get("content", "")
-        like_count = c.get("like_count", "0")
-        if text:
-            comments.append({"内容": text.strip(), "点赞": str(like_count)})
+        content_parts.append(f"\n标签：{' '.join('#' + t for t in tags)}")
 
     likes_int = int(liked) if str(liked).isdigit() else 0
     estimated_views = likes_int * 80 if likes_int > 0 else None
+
     return {
+        "metadata": {
+            "title": title, "desc": desc, "nickname": nickname,
+            "user_id": user_id, "tags": tags,
+            "liked": liked, "collected": collected,
+            "commented": commented, "shared": shared,
+            "publish_time": publish_time,
+        },
         "原文内容": "\n".join(content_parts),
-        "来源平台": "小红书",
         "发布者类型": f"小红书用户: {nickname} ({user_id})" if nickname else f"小红书用户: {user_id}",
         "互动数据": f"点赞{liked}, 收藏{collected}, 评论{commented}, 分享{shared}",
         "发布时间": publish_time,
-        "原文链接": url,
-        "评论列表": comments,
         "社媒数据": {
             "作者": nickname or user_id,
             "国家": ip_location,
@@ -440,7 +540,42 @@ def fetch_xhs_note(url: str, max_comments: int = 10) -> dict:
             "note_id": note_id,
             "nickname": nickname,
             "ip_location": ip_location,
+            "source": "xhshow",
         },
+    }
+
+
+def _assemble_result(formatted: dict, url: str, comments_raw: list) -> dict:
+    """Assemble final result dict from formatted metadata + comments."""
+    comments = []
+    for c in comments_raw:
+        text = c.get("content", "") or c.get("text", "")
+        like_count = c.get("like_count", "0")
+        if text:
+            comments.append({"内容": text.strip(), "点赞": str(like_count)})
+    return {
+        "原文内容": formatted["原文内容"],
+        "来源平台": "小红书",
+        "发布者类型": formatted["发布者类型"],
+        "互动数据": formatted["互动数据"],
+        "发布时间": formatted["发布时间"],
+        "原文链接": url,
+        "评论列表": comments,
+        "社媒数据": formatted["社媒数据"],
+        "_meta": formatted["_meta"],
+    }
+
+
+def _error_result(prefix: str, url: str, error_msg: str) -> dict:
+    return {
+        "原文内容": f"[{prefix} - 请重试]",
+        "来源平台": "小红书",
+        "发布者类型": "未知",
+        "互动数据": "",
+        "发布时间": "",
+        "原文链接": url,
+        "评论列表": [],
+        "_scrape_error": error_msg,
     }
 
 

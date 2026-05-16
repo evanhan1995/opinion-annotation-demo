@@ -32,6 +32,7 @@ PLATFORM_ABBREV = {
     "Reddit": "reddit",
     "Instagram": "ig",
     "TikTok": "tt",
+    "抖音": "dy",
     "通用网页": "web",
     "新闻媒体": "news",
     "论坛": "forum",
@@ -45,7 +46,7 @@ def _extract_content_id(url: str, platform: str) -> str:
     path = parsed.path.rstrip("/")
     path_parts = path.split("/")
 
-    if platform == "小红书":
+    if platform in ("小红书", "抖音"):
         return path_parts[-1] if path_parts else hashlib.md5(url.encode()).hexdigest()[:8]
 
     if platform == "YouTube":
@@ -100,6 +101,8 @@ def _detect_platform(url: str) -> str:
         return "Instagram"
     if "tiktok.com" in domain:
         return "TikTok"
+    if "douyin.com" in domain:
+        return "抖音"
     return "通用网页"
 
 
@@ -413,11 +416,22 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
 # Scraper dispatch table
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Douyin (抖音): TikTokDownloader-based (cookie-free metadata, cookie for comments)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _scrape_douyin(url: str, timeout: int = 30000) -> dict:
+    """Scrape douyin video via TikTokDownloader."""
+    from engine.tt_fetcher import fetch_douyin_video
+    return fetch_douyin_video(url)
+
+
 SCRAPERS = {
     "YouTube": _scrape_youtube,
     "小红书": _scrape_xhs,
     "Reddit": _scrape_reddit,
     "X": _scrape_x,
+    "抖音": _scrape_douyin,
 }
 
 
