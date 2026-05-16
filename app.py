@@ -105,6 +105,10 @@ TAB_LABELS = ["📝 手工录入", "🔗 URL 抓取", "📚 知识库", "💬 �
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = TAB_LABELS[0]
 
+# Handle deferred tab switches (e.g. from "查看 case" button in Tab 2)
+if st.session_state.get("_pending_tab"):
+    st.session_state.active_tab = st.session_state.pop("_pending_tab")
+
 active_tab = st.radio(
     "", TAB_LABELS, horizontal=True, label_visibility="collapsed", key="active_tab"
 )

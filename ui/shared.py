@@ -107,6 +107,7 @@ def _render_citations(citations: list):
             label = f"\U0001f4d6 {c['title'][:20]}"
             if st.button(label, key=f"cite_{c['path']}_{i}", use_container_width=True):
                 st.session_state._selected_page = c["path"]
+                st.session_state._pending_tab = "📚 知识库"
                 st.rerun()
 
 
@@ -281,6 +282,7 @@ def _render_annotation_result(key_prefix: str = ""):
                     )
                     if st.button(f"\U0001f4d6 查看 {s['filename']}", key=f"{key_prefix}view_{s['filename']}"):
                         st.session_state._selected_page = f"cases/{s['filename']}"
+                        st.session_state._pending_tab = "📚 知识库"
                         st.rerun()
 
     # -------- 舆情分类 --------

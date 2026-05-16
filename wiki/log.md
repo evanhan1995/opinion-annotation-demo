@@ -414,3 +414,48 @@ tags: [log, audit]
 - **风险标签**：客服, 质量
 - **来源链接**：https://www.xiaohongshu.com/explore/69fd59740000000010001c00?xsec_token=AByfWcg1eWWdWot40FUHsWNZMf4rAdp4xmQ4fDyhue8Ws=&xsec_source=pc_search&source=web_user_page
 - **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-15 14:53 | 自动Ingest | 生成 [[cases/case-028]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P1
+- **分流建议**：立即处理
+- **风险标签**：客服, 大规模传播
+- **来源链接**：https://www.xiaohongshu.com/explore/69722048000000000b00a225?xsec_token=ABurmP9ZfDGNy8BmhmzTOMpIn7vUoY3MO7asBTuCsv1KQ=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-16 11:51 | 自动Ingest | 生成 [[cases/case-029]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：质量, 客服
+- **来源链接**：https://www.douyin.com/jingxuan/search/TEMU%E9%81%BF%E9%9B%B7?aid=1e75f957-1051-49a1-bcc9-3f7bec2b2de3&modal_id=7640062790950439547&type=general
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-16 12:07 | 自动Ingest | 生成 [[cases/case-030]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P1
+- **分流建议**：立即处理
+- **风险标签**：安全, 质量, KOL负面
+- **来源链接**：https://www.xiaohongshu.com/explore/69db0e59000000001d01fd44?xsec_token=ABEcOSTaOvBIwNUTsqRpAxeZffTaHgdqYMa8MDOchtSDg=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-16 12:22 | 自动Ingest | 生成 [[cases/case-031]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P3
+- **分流建议**：可忽略
+- **风险标签**：-
+- **来源链接**：https://www.xiaohongshu.com/explore/69f55988000000001b021541?xsec_token=ABC3CsqGXJiUF_mnrC7pn79VtqAWgUNFAZsOiBCLqZ51w=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。
+
+### 2026-05-16 12:23 | 自动Ingest | 生成 [[cases/case-032]]
+
+- **操作类型**：自动 Ingest（标注完成自动生成）
+- **严重度**：P2
+- **分流建议**：持续观察
+- **风险标签**：质量, 客服
+- **来源链接**：https://www.xiaohongshu.com/explore/68c8b874000000001d0037ff?xsec_token=AB9CtwLLYHGPNTAa3y8tznTzigj5V5pTzNvnwxcLzI0uk=&xsec_source=pc_search&source=web_explore_feed
+- **说明**：AI 完成标注后自动生成案例页面，已更新案例索引和操作日志。

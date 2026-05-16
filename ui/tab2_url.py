@@ -23,20 +23,20 @@ from ui.shared import (
 def render_tab2(_pending_annotate_url, _pending_batch_urls):
     """Render the URL scraping tab (Tab 2)."""
 
-    st.info("URL 抓取需要本地浏览器环境，在线 Demo 不可用。支持 YouTube 和小红书链接。")
+    st.info("URL 抓取需要本地浏览器环境，在线 Demo 不可用。支持 YouTube、小红书和抖音链接。")
     url_input = st.text_input(
         "粘贴舆情链接",
-        placeholder="https://www.xiaohongshu.com/explore/... 或 https://www.youtube.com/watch?v=...",
+        placeholder="https://www.xiaohongshu.com/explore/... 或 https://www.youtube.com/watch?v=... 或 https://www.douyin.com/video/...",
         key="url_input",
     )
-    # URL validation: only YouTube and 小红书 are supported
+    # URL validation
     url_valid = True
     url_platform = ""
     if url_input.strip():
         url_platform = _detect_platform(url_input.strip())
-        if url_platform not in ("YouTube", "小红书"):
+        if url_platform not in ("YouTube", "小红书", "抖音"):
             url_valid = False
-            st.warning(f"暂不支持「{url_platform}」平台。目前仅支持 YouTube 和小红书链接。")
+            st.warning(f"暂不支持「{url_platform}」平台。目前仅支持 YouTube、小红书和抖音链接。")
 
     col1, col2 = st.columns([1, 1])
     with col1:
