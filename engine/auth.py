@@ -12,10 +12,10 @@ from pathlib import Path
 AUTH_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "auth_config.json"
 
 ROLE_TABS = {
-    "admin": ["📊 总览", "📡 Monitor", "📝 录入研判", "📋 案例处置", "📚 知识库", "📊 报告", "⚠️ 高危追踪"],
-    "monitor": ["📊 总览", "📝 录入研判", "📚 知识库"],
-    "disposition": ["📊 总览", "📋 案例处置", "📚 知识库"],
-    "report_editor": ["📊 总览", "📊 报告", "📚 知识库"],
+    "admin": ["📊 总览", "📡 Monitor", "📝 录入研判", "📋 案例处置", "📚 知识库", "📊 报告", "⚠️ 高危追踪", "⚙️ 设置"],
+    "monitor": ["📊 总览", "📝 录入研判", "📚 知识库", "⚙️ 设置"],
+    "disposition": ["📊 总览", "📋 案例处置", "📚 知识库", "⚙️ 设置"],
+    "report_editor": ["📊 总览", "📊 报告", "📚 知识库", "⚙️ 设置"],
 }
 
 ROLE_LABELS = {

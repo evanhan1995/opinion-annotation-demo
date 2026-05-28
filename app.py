@@ -29,6 +29,7 @@ from ui.tab4_disposition import render_tab4
 from ui.tab_knowledge import render_tab_knowledge
 from ui.tab6_reports import render_tab6
 from ui.tab_tracking import render_tab_tracking
+from ui.tab_settings import render_tab_settings
 
 # Startup sanity check: verify all scrapers importable
 _supported = list(SCRAPERS.keys())
@@ -231,26 +232,7 @@ if _pipeline_running:
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tab routing — match by label string, not index (TAB_LABELS varies by role)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-if active_tab == "📊 总览":
-    _render_overview()
-elif active_tab == "📡 Monitor":
-    render_tab3()
-elif active_tab == "📝 录入研判":
-    render_tab_entry()
-elif active_tab == "📋 案例处置":
-    render_tab4()
-elif active_tab == "📚 知识库":
-    render_tab_knowledge()
-elif active_tab == "📊 报告":
-    render_tab6()
-elif active_tab == "⚠️ 高危追踪":
-    render_tab_tracking()
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Overview dashboard
+# Overview dashboard (must be defined before tab routing below)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -342,6 +324,27 @@ def _render_overview():
             with plat_cols[i]:
                 st.metric(pf, cnt)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tab routing — match by label string, not index (TAB_LABELS varies by role)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if active_tab == "📊 总览":
+    _render_overview()
+elif active_tab == "📡 Monitor":
+    render_tab3()
+elif active_tab == "📝 录入研判":
+    render_tab_entry()
+elif active_tab == "📋 案例处置":
+    render_tab4()
+elif active_tab == "📚 知识库":
+    render_tab_knowledge()
+elif active_tab == "📊 报告":
+    render_tab6()
+elif active_tab == "⚠️ 高危追踪":
+    render_tab_tracking()
+elif active_tab == "⚙️ 设置":
+    render_tab_settings()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 显式重跑：确保标注完成后页面刷新到最新结果
