@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "auto_mode": false,
+  "pipeline_frequency": "6h",
+  "daily_report_time": "21:07",
+  "monthly_report_time": "09:03",
+  "monitor_times": ["00:07", "06:07", "12:07", "18:07"]
+}

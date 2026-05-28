@@ -1,0 +1,17 @@
+{
+  "desktop_alert": true,
+  "webhooks": [
+    {
+      "name": "飞书舆情告警群",
+      "url": "https://open.feishu.cn/open-apis/bot/v2/hook/01b044c0-eff9-4264-81b0-ff6086cd8ce0",
+      "enabled": true,
+      "trigger_level": "P0"
+    },
+    {
+      "name": "企业微信PR群",
+      "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLACE_WITH_YOUR_KEY",
+      "enabled": false,
+      "trigger_level": "P0+P1"
+    }
+  ]
+}

@@ -30,6 +30,7 @@ from engine.scraper import (
     fetch_youtube_subtitles,
     scrape,
 )
+from ui.theme import SEMANTIC_COLORS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -47,7 +48,7 @@ def _parse_frontmatter(content: str) -> dict:
                     key, _, val = line.partition(":")
                     key = key.strip()
                     val = val.strip()
-                    if key in ("title", "type", "severity", "action", "confidence", "created", "updated"):
+                    if key in ("title", "type", "severity", "action", "confidence", "created", "updated", "status", "notes"):
                         meta[key] = val
             meta["_body"] = parts[2]
     if "_body" not in meta:
@@ -58,8 +59,9 @@ def _parse_frontmatter(content: str) -> dict:
 def _load_wiki_pages() -> list[dict]:
     """Scan wiki/ directory and load metadata for all .md pages.
 
-    Returns list of dicts: {path, dir, title, type, filename, content}
+    Returns list of dicts: {path, dir, title, type, filename, content, _filepath}
     Sorted: cases numerically, others alphabetically.
+    Supports subdirectories under wiki/cases/ for platform grouping.
     """
     pages = []
     wiki_dir = PROJECT_DIR / "wiki"
@@ -69,20 +71,34 @@ def _load_wiki_pages() -> list[dict]:
         dir_path = wiki_dir / dirname
         if not dir_path.exists():
             continue
-        files = sorted(dir_path.glob("*.md"))
-        for f in files:
-            if f.name == "index.md":
-                continue
+
+        # Gather files: flat .md files + recurse into subdirectories
+        all_files: list[tuple[Path, str]] = []  # (Path, relative_dir_prefix)
+        for f in sorted(dir_path.glob("*.md")):
+            if f.name != "index.md":
+                all_files.append((f, dirname))
+        # Recurse into subdirectories (e.g. cases/xiaohongshu/)
+        for sub in sorted(dir_path.iterdir()):
+            if sub.is_dir():
+                for f in sorted(sub.glob("*.md")):
+                    if f.name != "index.md":
+                        all_files.append((f, f"{dirname}/{sub.name}"))
+
+        for f, rel_dir in all_files:
             try:
                 text = f.read_text(encoding="utf-8")
                 meta = _parse_frontmatter(text)
                 pages.append({
-                    "path": f"{dirname}/{f.name}",
+                    "path": f"{rel_dir}/{f.name}",
                     "dir": dirname,
                     "title": meta.get("title", f.stem),
                     "type": meta.get("type", dirname),
                     "filename": f.name,
                     "content": meta.get("_body", text),
+                    "_filepath": str(f),
+                    "status": meta.get("status", ""),
+                    "notes": meta.get("notes", ""),
+                    "severity": meta.get("severity", ""),
                 })
             except Exception:
                 continue
@@ -115,10 +131,11 @@ def _render_citations(citations: list):
 # Annotation result renderer
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _render_annotation_result(key_prefix: str = ""):
+def _render_annotation_result(key_prefix: str = "", show_social_card: bool = True):
     """Render annotation result display. Only called inside annotation tabs.
 
     key_prefix distinguishes widgets between Tab1/Tab2 to avoid duplicate key errors.
+    show_social_card: set False in tabs that already show social data in form fields.
     """
     result = st.session_state.annotation_result
     if not result:
@@ -145,7 +162,7 @@ def _render_annotation_result(key_prefix: str = ""):
     # -------- 社媒数据卡片 --------
     scraped = st.session_state.scraped_data
     social = scraped.get("社媒数据") if scraped else None
-    if social and social.get("作者"):
+    if show_social_card and social and social.get("作者"):
         platform = scraped.get("来源平台", "?")
         pub_time = scraped.get("发布时间", "") or "未知"
         with st.expander(f"\U0001f4ca 社媒数据 — {social.get('作者', '?')}", expanded=False, key=f"{key_prefix}social_card"):
@@ -176,7 +193,7 @@ def _render_annotation_result(key_prefix: str = ""):
             f"摘要: {result.get('摘要', '')[:80]}..."
         )
 
-    action_colors = {"立即处理": "#dc3545", "持续观察": "#ffc107", "可忽略": "#6c757d", "正面可利用": "#28a745"}
+    action_colors = SEMANTIC_COLORS["action"]
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -288,10 +305,7 @@ def _render_annotation_result(key_prefix: str = ""):
     # -------- 舆情分类 --------
     categories = result.get("舆情分类", [])
     if categories:
-        cat_colors = {
-            "商品问题": "#fd7e14", "商品侵权问题": "#dc3545", "售后问题": "#6f42c1",
-            "数据泄露": "#e83e8c", "软件问题": "#0d6efd", "其他": "#6c757d",
-        }
+        cat_colors = SEMANTIC_COLORS["category"]
         fallback = "#6c757d"
         cat_html = " ".join(
             f"<span style='background:{cat_colors.get(c, fallback)};color:white;padding:2px 8px;border-radius:10px;font-size:0.85em;margin-right:4px;'>{c}</span>"
@@ -311,12 +325,13 @@ def _render_annotation_result(key_prefix: str = ""):
         green = tl.get("绿", 0)
         total = red + yellow + green
 
+        tl = SEMANTIC_COLORS["traffic_light"]
         if total > 0:
             st.markdown(
                 f"<div style='display:flex;height:32px;border-radius:6px;overflow:hidden;margin:10px 0;'>"
-                + (f"<div style='width:{red/total*100}%;background:#dc3545;' title='负面 {red}'></div>" if red else "")
-                + (f"<div style='width:{yellow/total*100}%;background:#ffc107;' title='中性 {yellow}'></div>" if yellow else "")
-                + (f"<div style='width:{green/total*100}%;background:#28a745;' title='正面 {green}'></div>" if green else "")
+                + (f"<div style='width:{red/total*100}%;background:{tl['红']};' title='负面 {red}'></div>" if red else "")
+                + (f"<div style='width:{yellow/total*100}%;background:{tl['黄']};' title='中性 {yellow}'></div>" if yellow else "")
+                + (f"<div style='width:{green/total*100}%;background:{tl['绿']};' title='正面 {green}'></div>" if green else "")
                 + "</div>",
                 unsafe_allow_html=True,
             )
@@ -586,6 +601,13 @@ def _clear_correction_widgets():
 
 
 def do_scrape(url: str):
+    # Pre-flight dedup: check if URL already exists in KB
+    from engine.ingestor import _find_existing_case_by_url
+    existing = _find_existing_case_by_url(url)
+    if existing:
+        st.warning(f"该链接已在知识库中存在 ({existing})，跳过重复抓取。")
+        return {"_scrape_error": f"URL already ingested as {existing}"}
+
     with st.spinner(f"正在抓取 {url[:60]}..."):
         data = scrape(url)
         st.session_state.scraped_data = data

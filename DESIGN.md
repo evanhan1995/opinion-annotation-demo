@@ -1,6 +1,6 @@
 # 舆情标注系统 —— 深化设计方案
 
-> 版本: v1.6.0 | 日期: 2026-05-15 | 状态: Phase 17a+17b+17c 全部完成
+> 版本: v2.0.0 | 日期: 2026-05-23 | 状态: PRD Phases 1-5 全部完成（6-Agent 舆情指挥系统）
 
 ---
 
@@ -8,57 +8,112 @@
 
 ### 1.1 已完成
 
+**旧管线 (engine/)**：
 ```
 用户输入 URL 或手动粘贴
-  → scraper.py（4平台 + 通用回退）✅
+  → scraper.py（5平台 + 通用回退）✅
   → raw/cases/ 落盘 ✅
   → annotate.py（LLM 标注 + 流式输出 + 动态案例回灌）✅
   → outputs/ 落盘 ✅
   → ingestor.py（Wiki 案例生成 + 三维索引 + 归档 + 跨条目关联）✅
   → raw/archive/ 归档 ✅
-  → correction_handler.py（人工纠偏 → 校准案例，index 委托 index_mgr）✅
-  → agent.py（扫地僧：自然语言问答知识库）✅
-  → linker.py（跨平台事件碎片自动聚合）✅
-  → Web UI（4 Tab：手动输入 / URL抓取 / 知识库🔒 / 扫地僧）✅
-  → 知识库密码保护（st.secrets → env → config.json 三级）✅
+  → correction_handler.py（人工纠偏 → 校准案例）✅
+  → agent.py（扫地僧：知识库问答）✅
+  → linker.py（跨平台关联检测）✅
+  → Web UI（5 Tab：手工录入 / URL抓取 / 知识库🔒 / 扫地僧 / 操作演示）✅
+```
+
+**新架构 (agents/)** — PRD v1.2 6-Agent 舆情指挥系统：
+```
+Orchestrator 编排 4 条流:
+  流A: URL → Scraper → Analyst → [P0/P1熔断] → Handler → Curator ✅
+  流B: Monitor(定时巡检) → for each → 流A ✅
+  流C: Curator.query → Daily Report(日报/月报) ✅
+  流D: KB Q&A(扫地僧) ✅
+
+Agent 矩阵:
+  Monitor   — 关键词双维度搜索(YouTube/抖音/XHS) + Excel导出 + SEO快照 ✅
+  Scraper   — 三平台抓取 + 人工喂料降级 ✅
+  Analyst   — DeepSeek标注 + 相关性判定 + 流式输出 ✅
+  Handler   — 5状态机 + DeepSeek处置方案 + 时间线记录 ✅
+  Curator   — KB入库/索引/状态同步/问答 ✅
+  Daily Rpt — LLM日报/月报 + 模板fallback ✅
+  
+Scheduler: 日报21:07 / 月报1日09:03 / 巡检每6h ✅
+Notifications: P0/P1 PowerShell弹窗 + 系统音效 + Webhook ✅
+Streamlit: 8 Tab (新增 Monitor / 案例处置 / 报告) + 人工喂料UI ✅
 ```
 
 ### 1.2 代码规模
 
+**engine/ (旧管线 — 被 agents/ 包裹)**：
+
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `app.py` | 302 | Streamlit Web UI 入口（Tab3 知识库 + Tab4 扫地僧内联） |
-| `ui/shared.py` | 594 | 共享渲染函数（_render_annotation_result + 辅助函数 + Wiki 浏览器） |
-| `ui/sidebar.py` | 158 | 侧边栏（系统状态 + Dashboard + 巡检 + XHS Cookie） |
-| `ui/tab1_manual.py` | 117 | Tab1 手工录入 |
-| `ui/tab2_url.py` | 180 | Tab2 URL 抓取 + 批量模式 + deferred annotation |
-| `ui/tab5_demo.py` | 118 | Tab5 操作演示 |
-| `engine/annotate.py` | 657 | LLM 标注引擎（含流式 `annotate_one_stream`） |
-| `engine/xhs_fetcher.py` | 445 | 小红书 API 客户端（Phase 17c: GET/POST 签名统一走 xhshow 标准 API） |
-| `engine/scraper.py` | 412 | 多平台抓取调度 |
-| `engine/ingestor.py` | 326 | 自动 Ingest 管线 + linker 挂钩 |
-| `engine/agent.py` | 282 | 扫地僧问答引擎 |
-| `engine/correction_handler.py` | 283 | 纠偏差异处理 |
-| `engine/linker.py` | 236 | 跨条目关联检测（bigram 加权评分） |
-| `engine/index_mgr.py` | 136 | 共享 index 更新逻辑 |
-| `tests/test_core.py` | 382 | 21 个核心测试 |
-| `tests/test_app_state.py` | 375 | 32 个集成测试（deferred flow + tab 隔离 + I/O + XHS 签名回归） |
-| **总计** | **4,952** | |
+| `engine/annotate.py` | 844 | LLM 标注引擎 |
+| `engine/xhs_fetcher.py` | 590 | 小红书双通道抓取 |
+| `engine/scraper.py` | 505 | 多平台抓取调度 |
+| `engine/ingestor.py` | 520 | 自动 Ingest 管线 |
+| `engine/agent.py` | 331 | 扫地僧问答引擎 |
+| `engine/tt_fetcher.py` | 313 | 抖音抓取器 |
+| `engine/linker.py` | 312 | 跨平台关联检测 |
+| `engine/correction_handler.py` | 266 | 人工纠偏处理器 |
+| `engine/index_mgr.py` | 265 | 共享索引管理器 |
+| `engine/debug_xhs.py` | — | Cookie 诊断脚本 |
+
+**agents/ (新架构 — 6-Agent 舆情指挥系统)**：
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| `agents/orchestrator.py` | ~370 | 4条流编排 + P0/P1熔断 + 状态同步 |
+| `agents/monitor.py` | ~500 | 三平台搜索 + Excel + SEO快照 |
+| `agents/analyst.py` | ~140 | DeepSeek标注 + 相关性判定 |
+| `agents/curator.py` | ~260 | KB入库/索引/状态同步/问答 |
+| `agents/handler.py` | ~120 | 5状态机 + DeepSeek处置方案 |
+| `agents/daily_report.py` | ~270 | LLM日报/月报 + 模板fallback |
+| `agents/scraper.py` | ~130 | 三平台抓取门面 + 人工喂料 |
+| `agents/shared.py` | 178 | 模型工厂 + dataclass + JSON工具 |
+
+**ui/ (Streamlit)**：
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| `app.py` | ~370 | 8 Tab入口 + 人工喂料UI |
+| `ui/shared.py` | 596 | 共享渲染函数 |
+| `ui/sidebar.py` | 158 | 侧边栏 |
+| `ui/tab2_url.py` | 180 | URL 抓取 |
+| `ui/tab1_manual.py` | 117 | 手工录入 |
+| `ui/tab3_monitor.py` | ~65 | **新增** — Monitor 仪表板 |
+| `ui/tab4_disposition.py` | ~90 | **新增** — 案例处置 |
+| `ui/tab6_reports.py` | ~60 | **新增** — 报告查看 |
+| `ui/tab5_demo.py` | 124 | 操作演示 |
+
+**基础设施**：
+
+| 文件 | 职责 |
+|------|------|
+| `scheduler.py` | **新增** — 定时调度器 (日报21:07/月报09:03/巡检每6h) |
+| `monitor_keywords.json` | 关键词+品牌词配置 |
+| `notification_config.json` | P0/P1 Webhook 配置 |
+| `prompts/` (4文件) | Agent System Prompt 独立存放 |
+
+**测试：8 文件 111 测试全通过**
 
 ### 1.3 知识库资产
 
 | 目录 | 数量 | 说明 |
 |------|------|------|
-| `wiki/cases/` | 13 个案例 | P0×1, P1×2, P2×6, P3×4 — 全严重度覆盖 |
+| `wiki/cases/` | 18 个案例 | P0×1, P1×4, P2×9, P3×4 — 含抖音+小红书新增 |
+| `wiki/authors/` | 5 个作者 | 跨平台作者聚合页 |
 | `wiki/concepts/` | 5 篇 | 严重度/情感/分流/真实性/平台 |
 | `wiki/entities/` | 2 篇 | Meltwater / 新浪舆情通 |
 | `wiki/sources/` | 2 篇 | Evan 的 TEMU + DJI 复盘 |
 | `wiki/syntheses/` | 1 篇 | 标注规范活文档 |
-| `raw/cases/` | 4 个文件 | 待处理原始抓取 |
-| `raw/archive/` | 4 个文件 | 已处理归档 |
-| `outputs/` | 4 个文件 | 标注结果存档 |
+| `raw/cases/` | 7 个文件 | 待处理原始抓取 |
+| `raw/archive/` | 7 个文件 | 已处理归档 |
+| `outputs/` | 7 个文件 | 标注结果存档 |
 
-### 1.4 本次会话修复
+### 1.4 Phase 18 变更
 
 | # | 问题 | 修复 |
 |---|------|------|
@@ -121,14 +176,17 @@
 | 17a | app.py 拆分（302行入口 + ui/shared.py + sidebar.py + tab1/2/5，纯移动零变更） |
 | 17b | 测试补盲（27 集成测试：deferred flow + tab 隔离 + 文件 I/O + ingest 错误处理） |
 | 17c | XHS Cookie 攻坚（GET 签名统一走 xhshow 标准 API，补 x-xray-traceid，5 回归测试） |
+| 18 | Scraper 架构升级（XHS: XHS-Downloader cookie-free 元数据 + xhshow 评论；抖音: TikTokDownloader 新接入；69 测试零回归） |
 
-### 🔵 下一步 (5/15 优先)
+### 🔵 6-Agent 舆情指挥系统 (PRD Phases 1-5) — ✅ 全部完成
 
-| # | 任务 | 说明 | 预估 |
-|---|------|------|------|
-| ~~**17a**~~ | ~~**app.py 拆分**~~ | ✅ 完成：302行入口 + ui/shared(594) + sidebar(158) + tab1(117) + tab2(180) + tab5(118) | ~~半天~~ |
-| ~~**17b**~~ | ~~**测试补盲**~~ | ✅ 完成：27 集成测试（6 测试类），48/48 全通过 | ~~半天~~ |
-| ~~**17c**~~ | ~~**XHS Cookie 攻坚**~~ | ✅ 完成：签名统一走 xhshow 标准 API（GET 补 x-xray-traceid），29行→2行，5 回归测试 | ~~一天~~ |
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| Phase 1 | Agent 骨架：7模块 + shared + orchestrator + dataclass | ✅ |
+| Phase 2 | engine/ → agents/ 迁移 (Facade) + 34 case KB 迁移 | ✅ |
+| Phase 3 | 三平台搜索 + Excel + P0/P1告警 + SEO快照 + LLM日报 + 状态机同步 | ✅ |
+| Phase 4 | 调度器 + 通知 + MiniMax验证 | ✅ |
+| Phase 5 | UI: Monitor仪表板 + 案例处置 + 报告查看 + 人工喂料 | ✅ |
 
 ### 🟡 增量提质
 
@@ -142,9 +200,10 @@
 
 | # | 任务 | 说明 |
 |---|------|------|
-| 19 | 小红书图片OCR+视频ASR | PaddleOCR + Whisper，依赖 XHS Cookie 解决 |
+| 19 | 小红书图片OCR+视频ASR | PaddleOCR + Whisper |
 | 20 | 向量检索 | 案例 >200 时引入 embedding + vector search |
 | 21 | 多语言 + A/B | 非中文舆情翻译；不同 prompt 版本准确率对比 |
+| — | 微博/微信/新闻站点 | PRD §1.3 平台扩展路线图 Phase 6-7 |
 
 ---
 
@@ -177,6 +236,9 @@
 | Wait-for-selector 替代固定等待 | Playwright `wait_for_timeout` 无条件空等 2-3s | 2026-05-14 |
 | Deferred annotation 模式 | 按钮先清空旧结果再委托下次运行，避免新旧内容混淆 | 2026-05-14 |
 | Streamlit rerun gate 在脚本末 | `st.rerun()` 在 button handler 内会引发双层重跑竞态 | 2026-05-14 |
+| XHS 杂交方案而非全量替换 | XHS-Downloader 不支持评论抓取，元数据+评论双信道独立 | 2026-05-16 |
+| `_pending_tab` 延迟切换 | Streamlit widget 实例化后不可修改其 session_state key，需在 radio 前注入 | 2026-05-16 |
+| TikTokDownloader 程序化调用 | 不走 TUI，直接 import Detail/Comment 接口 + `asyncio.run()` 包装 | 2026-05-16 |
 
 ---
 

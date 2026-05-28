@@ -12,9 +12,13 @@ import json
 import re
 import sys
 import hashlib
+from concurrent import futures
 from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import urlparse
+
+# Hard timeout for yt-dlp extract_info calls (seconds).
+_SCRAPE_TIMEOUT = 90
 
 # Windows terminal UTF-8 adaptation
 if sys.platform == "win32":
@@ -129,11 +133,24 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
         "no_warnings": True,
         "getcomments": True,
         "extract_flat": False,
-        "extractor_args": {"youtube": {"max_comments": ["50"]}},
+        "extractor_args": {"youtube": {"max_comments": ["10"]}},
+        "socket_timeout": 60,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        executor = futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = executor.submit(ydl.extract_info, url, False)
+            try:
+                info = fut.result(timeout=_SCRAPE_TIMEOUT)
+            except futures.TimeoutError:
+                result["原文内容"] = "[抓取超时: yt-dlp 在 90s 内未返回]"
+                return result
+            except Exception as exc:
+                result["原文内容"] = f"[抓取失败: {exc}]"
+                return result
+        finally:
+            executor.shutdown(wait=False)
 
     title = info.get("title", "")
     channel = info.get("channel", "")
@@ -444,6 +461,7 @@ def fetch_youtube_subtitles(url: str) -> str:
         "quiet": True, "no_warnings": True, "extract_flat": False,
         "writesubtitles": True, "writeautomaticsub": True,
         "subtitleslangs": ["zh-Hans", "zh", "en"],
+        "socket_timeout": 30,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)

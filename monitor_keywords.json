@@ -1,0 +1,19 @@
+{
+  "keywords": [
+    {
+      "id": "kw001",
+      "keyword": "Temu",
+      "platforms": [
+        "youtube"
+      ],
+      "result_count": 10,
+      "active": true,
+      "notes": ""
+    }
+  ],
+  "defaults": {
+    "result_count": 30,
+    "date_sort_depth": 30,
+    "hot_sort_depth": 30
+  }
+}
