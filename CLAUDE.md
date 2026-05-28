@@ -18,22 +18,64 @@
 ```
 舆情标注Wiki/
 │
+├── agents/             6-Agent 舆情指挥系统 (PRD v1.2, 2026-05-23)
+│   ├── orchestrator.py  编排器 — 唯一跨Agent调度者，4条流 + P0/P1熔断
+│   ├── monitor.py       监测员 — 关键词搜索(YouTube/抖音/XHS) + Excel + SEO
+│   ├── scraper.py       采集员 — 三平台抓取 + 人工喂料降级
+│   ├── analyst.py       分析员 — DeepSeek标注 + 相关性判定
+│   ├── handler.py       处置跟进 — 5状态机 + DeepSeek处置方案
+│   ├── curator.py       保管员 — KB入库/索引/状态同步/问答
+│   ├── daily_report.py  日报组 — LLM日报/月报 + MiniMax/DeepSeek
+│   └── shared.py        共享 — 模型工厂 + dataclass + JSON工具
+│
+├── engine/             核心引擎实现层 (被 agents/ 包裹，保持向后兼容)
+│   ├── annotate.py     LLM 标注引擎 (844行)
+│   ├── scraper.py      多平台抓取调度 (505行)
+│   ├── xhs_fetcher.py  小红书双通道 (590行)
+│   ├── tt_fetcher.py   抖音抓取器 (313行)
+│   ├── ingestor.py     自动 Ingest 管线 (520行)
+│   ├── agent.py        扫地僧问答引擎 (331行)
+│   ├── linker.py       跨平台关联检测 (312行)
+│   ├── correction_handler.py  纠偏处理器 (266行)
+│   └── index_mgr.py    索引管理器 (265行)
+│
+├── ui/                 Streamlit 前端 (8 Tab)
+│   ├── tab1_manual.py   📝 手工录入
+│   ├── tab2_url.py      🔗 URL 抓取 + 人工喂料
+│   ├── tab3_monitor.py  📡 Monitor 仪表板 (NEW)
+│   ├── tab4_disposition.py 📋 案例处置 (NEW)
+│   ├── tab6_reports.py  📊 报告查看 (NEW)
+│   ├── tab5_demo.py     🎬 操作演示
+│   ├── shared.py        共享渲染函数
+│   └── sidebar.py       侧边栏
+│
+├── prompts/            Agent System Prompt 独立存放
+│   ├── analyst_system.txt
+│   ├── handler_system.txt
+│   ├── curator_system.txt
+│   └── daily_report_system.txt
+│
+├── scheduler.py        定时调度器 (日报21:07/月报09:03/巡检每6h)
+│
 ├── raw/                原始资料收件箱 —— 只读，永不修改
 │   ├── cases/          待处理的舆情案例原文
-│   └── archive/        ingest 后的归档区
+│   ├── archive/        ingest 后的归档区
+│   └── monitor/        监测结果存档
 │
 ├── wiki/               知识编译输出层 —— AI 全权维护
-│   ├── index.md        全局索引（所有 wiki 页面的摘要目录）
-│   ├── log.md          操作日志（append-only，记录每次变更）
-│   ├── concepts/       标注概念（严重度评级、情感分析、分流判断等）
-│   ├── entities/       实体（工具、平台）
-│   ├── sources/        来源摘要（工作复盘文档提炼）
-│   ├── syntheses/      综合文档（标注规范活文档）
-│   └── cases/          标注案例库（迭代引擎）
+│   ├── index.md        全局索引
+│   ├── log.md          操作日志（append-only）
+│   ├── concepts/       标注概念（5篇）
+│   ├── entities/       实体（2篇）
+│   ├── sources/        来源摘要（2篇）
+│   ├── syntheses/      综合文档（4篇）
+│   ├── cases/          标注案例库（34个，含 status 字段）
+│   ├── authors/        作者库（12个）
+│   └── reports/        日报/月报
 │
-├── outputs/            对外输出
+├── outputs/            标注结果 + Monitor Excel + SEO 快照
 │
-└── CLAUDE.md           本文件 —— AI Agent 操作手册
+└── tests/              8 测试文件，111 测试全通过
 ```
 
 ---
@@ -179,3 +221,68 @@ related_cases:
 - **来源摘要**：忠于原文 + 核心论点 + 个人评注
 - **案例分析**：输入→输出→判据链→边界讨论→对规范的影响（五段完整）
 - **标注规范**：作为活文档，始终保持与案例库的一致性
+
+---
+
+## 🖥️ Streamlit 开发规则
+
+- **Tab 导航**：始终用 `st.radio(key='active_tab')` + session_state，禁止在 widget 实例化后修改 active_tab（会触发 StreamlitAPIException），用 deferred-switch 模式
+- **Widget key 唯一性**：所有交互组件必须有唯一 `key=`，跨文件重构后检查 key 碰撞
+- **调试前置**：`lsof -i :8501` 杀残留进程，避免旧代码干扰
+- **for 循环变量覆盖**：for 循环解包变量名不要与外层对象同名（如 `for publisher in...` 覆盖外层 publisher 对象），pytest 不可见仅浏览器暴露
+
+## 🤖 6-Agent 舆情指挥系统
+
+### 架构总览
+
+```
+┌─────────────── Orchestrator ───────────────┐
+│ 流A: URL → Scraper → Analyst → Handler → Curator │
+│ 流B: Monitor → [for each new item] → 流A          │
+│ 流C: Curator.query → DailyReport → .md            │
+│ 流D: KB Q&A (扫地僧)                              │
+│ P0/P1 熔断: Analyst → emergency_dispatch() → 弹窗+Webhook │
+└─────────────────────────────────────────────┘
+```
+
+### Agent 权限矩阵
+
+| 操作 | Monitor | Scraper | Analyst | Handler | Curator | Daily Rpt | Orchestrator |
+|------|---------|---------|---------|---------|---------|-----------|--------------|
+| 关键词搜索 | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 内容抓取 | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| LLM 标注 | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 处置方案 | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| KB 写入 | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| 日报/月报 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| 跨Agent传递 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅(唯一) |
+
+### 模型分配
+
+| Agent | 模型 | 原因 |
+|-------|------|------|
+| Monitor | 无 (纯代码) | 搜索/去重/Excel |
+| Scraper | 无 (纯代码) | 抓取/解析 |
+| Analyst | DeepSeek (deepseek-chat) | 复杂推理+严格JSON |
+| Handler | DeepSeek (deepseek-chat) | 逻辑一致性 |
+| Curator | DeepSeek (Q&A) + 模板 | 低需求/低成本 |
+| Daily Report | DeepSeek (MiniMax备选) | 中文长文生成 |
+
+### 关键命令
+
+```bash
+# Web UI
+streamlit run app.py --server.port 8501
+
+# 调度器
+python scheduler.py            # 启动守护进程
+python scheduler.py --once     # 测试：运行全部任务一次
+python scheduler.py --daily    # 仅生成日报
+python scheduler.py --monitor  # 仅执行 Monitor 巡检
+
+# Cookie 管理 (XHS 搜索需要)
+python -c "import sys; sys.path.insert(0,'engine'); from xhs_fetcher import bootstrap_cookies; bootstrap_cookies(force=True)"
+
+# 测试
+python -m pytest tests/ -x -q
+```

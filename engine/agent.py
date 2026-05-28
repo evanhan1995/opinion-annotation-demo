@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from agents.shared import call_with_timeout
+
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
 WIKI_DIR = PROJECT_DIR / "wiki"
@@ -300,12 +302,19 @@ def _call_openai_style(messages: list[dict], config: dict) -> str:
         api_key=config["api_key"],
         base_url=config.get("api_base", "https://api.deepseek.com"),
     )
-    resp = client.chat.completions.create(
-        model=config.get("model", "deepseek-chat"),
-        messages=messages,
-        max_tokens=config.get("max_tokens", 2048),
-        temperature=config.get("temperature", 0.3),
-    )
+
+    def _call():
+        return client.chat.completions.create(
+            model=config.get("model", "deepseek-chat"),
+            messages=messages,
+            max_tokens=config.get("max_tokens", 2048),
+            temperature=config.get("temperature", 0.3),
+            timeout=90,
+        )
+
+    resp, err = call_with_timeout(_call, 90)
+    if err:
+        return f"[Agent API 错误: {err}]"
     return resp.choices[0].message.content or ""
 
 
@@ -322,10 +331,17 @@ def _call_anthropic(messages: list[dict], config: dict) -> str:
             user_messages.append(m)
 
     client = anthropic.Anthropic(api_key=config["api_key"])
-    resp = client.messages.create(
-        model=config.get("model", "claude-sonnet-4-6"),
-        system=system,
-        messages=user_messages,
-        max_tokens=config.get("max_tokens", 2048),
-    )
+
+    def _call():
+        return client.messages.create(
+            model=config.get("model", "claude-sonnet-4-6"),
+            system=system,
+            messages=user_messages,
+            max_tokens=config.get("max_tokens", 2048),
+            timeout=90,
+        )
+
+    resp, err = call_with_timeout(_call, 90)
+    if err:
+        return f"[Agent API 错误: {err}]"
     return resp.content[0].text

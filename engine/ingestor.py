@@ -9,7 +9,9 @@
 """
 
 import json
+import os
 import re
+import time
 from datetime import datetime, date
 from pathlib import Path
 
@@ -121,6 +123,8 @@ def ingest(
     scraped_data: dict,
     annotation_result: dict,
     url: str = "",
+    notes: str = "",
+    init_status: str = "待跟进",
 ) -> dict:
     """Auto-ingest: generate case from annotation if URL is new.
 
@@ -143,7 +147,8 @@ def ingest(
     social = scraped_data.get("社媒数据", {})
     platform = scraped_data.get("来源平台", "未知")
     author_file = _upsert_author(social, platform) if social else None
-    case_file = _generate_auto_case(scraped_data, annotation_result, url, author_file)
+    case_file = _generate_auto_case(scraped_data, annotation_result, url, author_file,
+                                     notes=notes, init_status=init_status)
     _update_case_index(case_file, annotation_result, scraped_data)
     _update_global_index(case_file, annotation_result)
     _append_ingest_log(case_file, annotation_result, url)
@@ -190,10 +195,15 @@ def _find_existing_case_by_url(url: str) -> str | None:
 
     Only reads the YAML frontmatter block (between --- delimiters) of each
     case file, not the full file body.  O(N) in number of cases, constant per file.
+    Searches flat + platform subdirectories.
     """
     if not url or not CASES_DIR.exists():
         return None
-    for f in sorted(CASES_DIR.glob("case-*.md")):
+    all_files = list(CASES_DIR.glob("case-*.md"))
+    for sub in CASES_DIR.iterdir():
+        if sub.is_dir():
+            all_files.extend(sub.glob("case-*.md"))
+    for f in sorted(all_files):
         text = f.read_text(encoding="utf-8")
         parts = text.split("---", 2)
         if len(parts) >= 3:
@@ -206,17 +216,51 @@ def _find_existing_case_by_url(url: str) -> str | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Platform subdirectory routing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+PLATFORM_SUBDIR = {
+    "小红书": "xiaohongshu",
+    "抖音": "douyin",
+    "YouTube": "youtube",
+    "xiaohongshu": "xiaohongshu",
+    "douyin": "douyin",
+    "youtube": "youtube",
+}
+
+
+def _get_case_dir(platform: str) -> Path:
+    """Get the target directory for a case based on platform."""
+    sub = PLATFORM_SUBDIR.get(platform)
+    if sub:
+        target = CASES_DIR / sub
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    return CASES_DIR
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Case ID
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _get_next_case_id() -> str:
-    """Get next case-XXX id by scanning existing files."""
-    existing = CASES_DIR.glob("case-*.md") if CASES_DIR.exists() else []
+def get_next_case_id() -> str:
+    """Get next case-XXX id by scanning existing files (flat + subdirectories).
+
+    Canonical implementation — other modules should import this function
+    rather than maintaining their own copies.
+    """
     max_id = 0
-    for f in existing:
-        m = re.search(r'case-(\d+)', f.name)
-        if m:
-            max_id = max(max_id, int(m.group(1)))
+    if CASES_DIR.exists():
+        for f in CASES_DIR.glob("case-*.md"):
+            m = re.search(r'case-(\d+)', f.name)
+            if m:
+                max_id = max(max_id, int(m.group(1)))
+        for sub in CASES_DIR.iterdir():
+            if sub.is_dir():
+                for f in sub.glob("case-*.md"):
+                    m = re.search(r'case-(\d+)', f.name)
+                    if m:
+                        max_id = max(max_id, int(m.group(1)))
     return f"case-{max_id + 1:03d}"
 
 
@@ -330,9 +374,11 @@ def _generate_auto_case(
     annotation_result: dict,
     url: str = "",
     author_file: str = None,
+    notes: str = "",
+    init_status: str = "待跟进",
 ) -> str:
     """Generate auto-ingest case page. Returns filename (e.g. 'case-008.md')."""
-    case_id = _get_next_case_id()
+    case_id = get_next_case_id()
     filename = f"{case_id}.md"
 
     title_text = annotation_result.get("摘要", scraped_data.get("原文内容", ""))[:60].replace("\n", " ")
@@ -373,9 +419,11 @@ severity: {severity}
 action: {action}
 platform: {platform}
 source: auto_ingest
+status: {init_status}
 {url_line}
 {cat_line}
 {author_line}
+notes: {notes}
 tags: [auto_ingest, {severity}]
 ---
 
@@ -409,15 +457,44 @@ tags: [auto_ingest, {severity}]
 
 {chr(10).join(boundary_lines)}
 
+## 处置备注
+
+{notes if notes else '（无）'}
+
 ## 对标注规范的影响
 
 （自动标注案例。如后续人工纠偏确认了此标注，则规范无需调整；
 如纠偏发现差异，则需根据差异类型更新对应决策规则。）
 """
 
-    CASES_DIR.mkdir(parents=True, exist_ok=True)
-    filepath = CASES_DIR / filename
-    with open(filepath, "w", encoding="utf-8") as f:
+    target_dir = _get_case_dir(platform)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Atomic file creation with retry to prevent concurrent ingest race.
+    # Step 2 of the pipeline can run up to 3 concurrent ingest() calls;
+    # two threads scanning for the same case ID and writing would cause
+    # silent data loss. os.O_CREAT|O_EXCL guarantees exactly one winner.
+    _retry_count = 0
+    _retry_max = 10
+    while True:
+        filepath = target_dir / filename
+        try:
+            fd = os.open(str(filepath), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            _retry_count += 1
+            if _retry_count >= _retry_max:
+                raise RuntimeError(
+                    f"Failed to allocate unique case ID after {_retry_max} attempts "
+                    f"(last tried: {filename})"
+                )
+            _delay = 0.05 * _retry_count
+            time.sleep(_delay)
+            case_id = get_next_case_id()
+            filename = f"{case_id}.md"
+            continue
+        break
+
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(content)
 
     return filename

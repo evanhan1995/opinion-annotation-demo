@@ -33,14 +33,9 @@ SIGNIFICANT_FIELDS = [
 ]
 
 def _get_next_case_id() -> str:
-    """获取下一个案例编号。"""
-    existing = list(CASES_DIR.glob("case-*.md"))
-    max_id = 0
-    for f in existing:
-        m = re.search(r'case-(\d+)', f.name)
-        if m:
-            max_id = max(max_id, int(m.group(1)))
-    return f"case-{max_id + 1:03d}"
+    """获取下一个案例编号。Delegates to canonical ingestor implementation."""
+    from engine.ingestor import get_next_case_id
+    return get_next_case_id()
 
 
 def _parse_date(date_str: str) -> str:
@@ -171,7 +166,10 @@ tags: [纠偏案例, {severity}]
 （待分析：此纠偏案例揭示的规则盲区或阈值调整建议。）
 """
 
-    filepath = CASES_DIR / filename
+    from engine.ingestor import _get_case_dir
+    platform = original_input.get("来源平台", "未知")
+    target_dir = _get_case_dir(platform)
+    filepath = target_dir / filename
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 

@@ -24,10 +24,22 @@ if sys.platform == "win32":
 # 路径配置
 # ═══════════════════════════════════════════════════════════════════════════════
 
+from agents.shared import call_with_timeout
+
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
 WIKI_DIR = PROJECT_DIR / "wiki"
 CONFIG_PATH = ENGINE_DIR / "config.json"
+
+# Module-level file cache: wiki pages are read once per session
+# and don't change during a single pipeline run.
+_FILE_CACHE: dict[str, str] = {}
+
+def _cached_read(path: str) -> str:
+    """Read file with module-level cache. Cache hit avoids disk I/O."""
+    if path not in _FILE_CACHE:
+        _FILE_CACHE[path] = Path(path).read_text(encoding="utf-8")
+    return _FILE_CACHE[path]
 
 # 系统提示词固定层（案例层由 _get_relevant_case_layers() 按内容相关性动态选择）
 _FIXED_PROMPT_LAYERS = [
@@ -63,7 +75,7 @@ def _tokenize_for_search(text: str) -> list[str]:
 def _score_case_file(filepath: Path, tokens: list[str]) -> int:
     """Score a case file against search tokens. Higher = more relevant."""
     try:
-        text = filepath.read_text(encoding="utf-8")
+        text = _cached_read(str(filepath))
     except Exception:
         return 0
     score = 0
@@ -230,8 +242,7 @@ def build_system_prompt(user_content: str = "") -> tuple[str, dict]:
             stats["layers"][rel_path] = {"status": "missing", "chars": 0, "tokens": 0}
             continue
 
-        with open(file_path, "r", encoding="utf-8") as f:
-            raw = f.read()
+        raw = _cached_read(str(file_path))
 
         body = strip_yaml_frontmatter(raw)
         layers_content[rel_path] = body
@@ -395,8 +406,8 @@ def _annotate_openai_style(user_message: str, system_prompt: str, config: dict) 
 
     client = OpenAI(api_key=config["api_key"], base_url=config["api_base"])
 
-    try:
-        response = client.chat.completions.create(
+    def _call():
+        return client.chat.completions.create(
             model=config["model"],
             max_tokens=config["max_tokens"],
             temperature=config["temperature"],
@@ -407,28 +418,29 @@ def _annotate_openai_style(user_message: str, system_prompt: str, config: dict) 
             ],
         )
 
-        raw_text = response.choices[0].message.content
-        json_text = extract_json_from_response(raw_text)
+    response, err = call_with_timeout(_call, 120)
+    if err:
+        return {"error": True, "message": f"API 错误: {err}"}
 
-        try:
-            result = json.loads(json_text)
-            result["_meta"] = {
-                "model": response.model,
-                "usage": {
-                    "input_tokens": response.usage.prompt_tokens,
-                    "output_tokens": response.usage.completion_tokens,
-                },
-            }
-            return result
-        except json.JSONDecodeError:
-            return {
-                "error": True,
-                "message": "API 返回内容无法解析为 JSON",
-                "raw_response": raw_text,
-            }
+    raw_text = response.choices[0].message.content
+    json_text = extract_json_from_response(raw_text)
 
-    except Exception as e:
-        return {"error": True, "message": f"API 错误: {e}"}
+    try:
+        result = json.loads(json_text)
+        result["_meta"] = {
+            "model": response.model,
+            "usage": {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            },
+        }
+        return result
+    except json.JSONDecodeError:
+        return {
+            "error": True,
+            "message": "API 返回内容无法解析为 JSON",
+            "raw_response": raw_text,
+        }
 
 
 def _annotate_anthropic(user_message: str, system_prompt: str, config: dict) -> dict:
@@ -440,37 +452,39 @@ def _annotate_anthropic(user_message: str, system_prompt: str, config: dict) -> 
 
     client = anthropic.Anthropic(api_key=config["api_key"])
 
-    try:
-        response = client.messages.create(
+    def _call():
+        return client.messages.create(
             model=config["model"],
             max_tokens=config["max_tokens"],
             temperature=config["temperature"],
+            timeout=120,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
 
-        raw_text = response.content[0].text
-        json_text = extract_json_from_response(raw_text)
+    response, err = call_with_timeout(_call, 120)
+    if err:
+        return {"error": True, "message": f"API 错误: {err}"}
 
-        try:
-            result = json.loads(json_text)
-            result["_meta"] = {
-                "model": response.model,
-                "usage": {
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                },
-            }
-            return result
-        except json.JSONDecodeError:
-            return {
-                "error": True,
-                "message": "API 返回内容无法解析为 JSON",
-                "raw_response": raw_text,
-            }
+    raw_text = response.content[0].text
+    json_text = extract_json_from_response(raw_text)
 
-    except Exception as e:
-        return {"error": True, "message": f"API 错误: {e}"}
+    try:
+        result = json.loads(json_text)
+        result["_meta"] = {
+            "model": response.model,
+            "usage": {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            },
+        }
+        return result
+    except json.JSONDecodeError:
+        return {
+            "error": True,
+            "message": "API 返回内容无法解析为 JSON",
+            "raw_response": raw_text,
+        }
 
 
 def annotate_one_stream(user_message: str, system_prompt: str, config: dict):
