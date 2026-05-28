@@ -1,15 +1,18 @@
 # 舆情日报 {{date}}
 
+今日要点：{{intro_one_sentence}}
+
+──────────────────────────────────────────────────
+
 ## 一、声量概览
-- 当日新增案例：**{{total_new_cases}}** 条
-- 前7日均值：**{{avg_prev_7days}}** 条
-- 变化趋势：{{trend}}
+当日新增案例 **{{total_new_cases}}** 条，较前7日均值（{{avg_prev_7days}} 条）{{trend}}。{{volume_analysis}}
 
 ## 二、情感分布
-- 正面：**{{sentiment_positive}}%** | 中性：**{{sentiment_neutral}}%** | 负面：**{{sentiment_negative}}%**
-- {{sentiment_highlight}}
+正面 **{{sentiment_positive}}%** | 中性 **{{sentiment_neutral}}%** | 负面 **{{sentiment_negative}}%**
 
-## 三、关键议题TOP5
+{{sentiment_highlight}}
+
+## 三、关键议题 TOP5
 {{top_issues}}
 
 ## 四、风险分级
@@ -29,6 +32,8 @@
 ## 六、处置状态统计
 - 待跟进：**{{status_pending}}** | 处理中：**{{status_in_progress}}** | 已处理：**{{status_done}}**
 - 已放弃：**{{status_abandoned}}** | 忽略：**{{status_ignored}}**
+
+{{disposition_analysis}}
 
 ---
 *本报告由舆情指挥系统自动生成*

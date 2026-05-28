@@ -131,6 +131,7 @@ def generate_daily(date_str: str = "") -> str:
 
 
 _TEMPLATES_DIR = PROJECT_ROOT / "templates"
+_EXAMPLES_DIR = _TEMPLATES_DIR / "report_examples"
 
 
 def _read_template(filename: str) -> str | None:
@@ -139,6 +140,19 @@ def _read_template(filename: str) -> str | None:
     if path.exists():
         return path.read_text(encoding="utf-8")
     return None
+
+
+def _load_report_example(report_type: str) -> str:
+    """Load a Daily World-style report example for format guidance.
+
+    Args:
+        report_type: "daily" or "monthly"
+    """
+    filename = f"{report_type}_report_example.md"
+    path = _EXAMPLES_DIR / filename
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return ""
 
 
 def _build_daily_markdown(data: ReportData) -> str:
@@ -160,29 +174,46 @@ def _build_daily_markdown(data: ReportData) -> str:
 
     platform_str = "\n".join(f"- {k}：{v} 条" for k, v in data.platform_dist.items()) if data.platform_dist else "暂无"
 
+    example = _load_report_example("daily")
+
     if template:
-        prompt = f"""根据以下舆情统计数据，严格按照提供的模板格式生成一份舆情日报。
-
-**模板格式**（必须严格遵循此结构）：
-```
-{template}
-```
-
-**实际数据**：
-- 日期：{data.date}
-- 案例总数：{data.total_new_cases} 条（前7日均值：{data.avg_prev_7days} 条）
-- 情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%
-- 关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}
-- 严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}
-- 平台分布：{platform_str}
-- 处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}
-- P0/P1事件：\n{p0p1_str or '无'}
-
-要求：
-1. 将数据填入模板中，替换 {{{{占位符}}}}
-2. 保持模板的章节结构不变
-3. 每个章节简洁专业（2-4句），突出异常和趋势
-4. 只输出 Markdown，不要额外解释"""
+        prompt_parts = [
+            "根据以下舆情统计数据，严格按照提供的模板格式生成一份舆情日报。",
+            "",
+            "**模板格式**（必须严格遵循此结构）：",
+            "```",
+            template,
+            "```",
+        ]
+        if example:
+            prompt_parts.extend([
+                "",
+                "**参考示例**（以下是一份优秀日报的格式参考，请注意其：───分隔线风格、中文自然段落而非纯数据罗列、每个章节 2-4 句专业分析、关键数字加粗）：",
+                "```",
+                example,
+                "```",
+            ])
+        prompt_parts.extend([
+            "",
+            "**实际数据**：",
+            f"- 日期：{data.date}",
+            f"- 案例总数：{data.total_new_cases} 条（前7日均值：{data.avg_prev_7days} 条）",
+            f"- 情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%",
+            f"- 关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}",
+            f"- 严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}",
+            f"- 平台分布：{platform_str}",
+            f"- 处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}",
+            f"- P0/P1事件：\n{p0p1_str or '无'}",
+            "",
+            "要求：",
+            "1. 将数据填入模板中，用实际数据替换 {{占位符}}",
+            "2. 保持模板的章节结构不变，使用 ─── 作为一级分隔线",
+            "3. 每个章节写 2-4 句自然的中文分析段落，而非仅罗列数字",
+            "4. 突出异常数据和趋势变化，关键数字使用 **加粗**",
+            "5. 语气专业、客观，面向企业舆情管理团队",
+            "6. 只输出 Markdown，不要额外解释",
+        ])
+        prompt = "\n".join(prompt_parts)
     else:
         prompt = f"""根据以下舆情统计数据，生成一份专业的舆情日报（Markdown 格式）。
 
@@ -263,23 +294,45 @@ def generate_monthly(month_str: str = "") -> str:
         try:
             client, model = get_llm("deepseek")
             platform_str = "\n".join(f"- {k}：{v} 条" for k, v in data.platform_dist.items()) if data.platform_dist else "暂无"
-            prompt = f"""根据以下舆情统计数据，严格按照提供的模板格式生成一份舆情月报。
+            example = _load_report_example("monthly")
 
-**模板格式**（必须严格遵循此结构）：
-```
-{template}
-```
-
-**实际数据**：
-- 月份：{month_str}
-- 案例总数：{data.total_new_cases} 条
-- 情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%
-- 关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}
-- 严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}
-- 平台分布：{platform_str}
-- 处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}
-
-要求：将数据填入模板替换{{{{占位符}}}}，保持模板结构，只输出Markdown。"""
+            prompt_parts = [
+                "根据以下舆情统计数据，严格按照提供的模板格式生成一份舆情月报。",
+                "",
+                "**模板格式**（必须严格遵循此结构）：",
+                "```",
+                template,
+                "```",
+            ]
+            if example:
+                prompt_parts.extend([
+                    "",
+                    "**参考示例**（注意其───分隔线、自然段落分析、趋势判断风格）：",
+                    "```",
+                    example,
+                    "```",
+                ])
+            prompt_parts.extend([
+                "",
+                "**实际数据**：",
+                f"- 月份：{month_str}",
+                f"- 案例总数：{data.total_new_cases} 条",
+                f"- 情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%",
+                f"- 关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}",
+                f"- 严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}",
+                f"- 平台分布：{platform_str}",
+                f"- 处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}",
+                "",
+                "要求：",
+                "1. 将数据填入模板中，用实际数据替换 {{占位符}}",
+                "2. 保持模板的章节结构不变，使用 ─── 作为一级分隔线",
+                "3. 每个章节写 2-4 句自然的中文分析段落，包含趋势判断和环比对比",
+                "4. 突出异常数据和趋势变化，关键数字使用 **加粗**",
+                "5. 七八章（效率统计和下月建议）给出有数据支撑的具体建议",
+                "6. 语气专业、客观，面向企业舆情管理团队",
+                "7. 只输出 Markdown，不要额外解释",
+            ])
+            prompt = "\n".join(prompt_parts)
 
             response = client.chat.completions.create(
                 model=model, max_tokens=2048, temperature=0.4, timeout=60,
