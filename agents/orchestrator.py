@@ -49,6 +49,7 @@ class PipelineResult:
     kb_entry: Optional[KBEntry] = None
     emergency_triggered: bool = False
     errors: list[str] = field(default_factory=list)
+    item_results: list = field(default_factory=list)  # Flow B per-item PipelineResult objects
 
 
 # ── Notification dispatch (PRD §3.6) ───────────────────────────────────
@@ -133,7 +134,9 @@ def _send_webhook(url: str, annotation: Annotation):
 
 
 # ── Scraper degradation tracking (PRD S-06) ────────────────────────────
+import threading as _threading
 _SCRAPER_FAILURES: dict[str, int] = {}  # platform → consecutive failure count
+_failures_lock = _threading.Lock()
 
 
 def get_scraper_degraded() -> tuple[bool, str]:
@@ -141,59 +144,25 @@ def get_scraper_degraded() -> tuple[bool, str]:
 
     Returns (is_degraded, platform_name). UI checks this to show manual feed.
     """
-    for pf, count in _SCRAPER_FAILURES.items():
-        if count >= 3:
-            return True, pf
+    with _failures_lock:
+        for pf, count in _SCRAPER_FAILURES.items():
+            if count >= 3:
+                return True, pf
     return False, ""
 
 
 def reset_scraper_failures(platform: str = ""):
     """Reset failure counter (called after successful fetch or manual feed)."""
-    if platform:
-        _SCRAPER_FAILURES.pop(platform, None)
-    else:
-        _SCRAPER_FAILURES.clear()
+    with _failures_lock:
+        if platform:
+            _SCRAPER_FAILURES.pop(platform, None)
+        else:
+            _SCRAPER_FAILURES.clear()
 
 
-# ── Data clipping (PRD §3.4) ───────────────────────────────────────────
-def _clip_for_analyst(raw: RawData, keyword_context: str = "") -> dict:
-    """Only pass fields Analyst needs. Strip handler/kb state."""
-    return {
-        "url": raw.url,
-        "platform": raw.platform,
-        "title": raw.title,
-        "content": raw.content,
-        "comments": raw.comments_raw,
-        "keyword_context": keyword_context,
-    }
-
-
-def _clip_for_handler(annotation: Annotation) -> dict:
-    """Only pass annotation fields Handler needs. Strip raw data."""
-    return {
-        "url": annotation.url,
-        "platform": annotation.platform,
-        "severity": annotation.severity,
-        "severity_reason": annotation.severity_reason,
-        "risk_tags": annotation.risk_tags,
-        "triage": annotation.triage,
-        "summary": annotation.summary,
-    }
-
-
-def _clip_for_curator(raw: RawData, annotation: Annotation, status: str = "待跟进") -> dict:
-    """Only pass fields Curator needs for KB ingestion."""
-    return {
-        "url": raw.url,
-        "platform": raw.platform,
-        "title": raw.title,
-        "author": raw.author,
-        "publish_time": raw.publish_time,
-        "severity": annotation.severity,
-        "risk_tags": annotation.risk_tags,
-        "category": annotation.category,
-        "status": status,
-    }
+# ── Data clipping (PRD §3.4) — Channel isolation by field selection.
+# Agent interfaces already enforce this via typed dataclasses (RawData → Annotation → ActionPlan → KBEntry);
+# additional field-level clipping proved unnecessary in practice.
 
 
 # ── Flow A: Passive analysis ──────────────────────────────────────────
@@ -217,39 +186,71 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
         raw = fetch(url)
         platform = detect_platform(url)
         if raw.comments_raw and any("error" in str(c).lower() or "fail" in str(c).lower() or "unsupported" in str(c).lower() for c in raw.comments_raw):
-            _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
+            with _failures_lock:
+                _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
         elif not raw.content and not raw.title:
-            _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
+            with _failures_lock:
+                _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
         else:
-            _SCRAPER_FAILURES.pop(platform, None)  # Reset on success
+            with _failures_lock:
+                _SCRAPER_FAILURES.pop(platform, None)  # Reset on success
     except Exception as e:
-        platform = url
-        _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
+        platform = detect_platform(url) if 'detect_platform' in dir() else url
+        if isinstance(platform, str) and platform != url:
+            with _failures_lock:
+                _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
         return PipelineResult(
             flow="passive_analysis", started_at=started,
             finished_at=datetime.now().isoformat(), success=False,
-            errors=[f"Scraper error: {e}"],
+            errors=[f"[{platform}] Scraper error for {url}: {e}"],
         )
 
     if not raw.content and not raw.title:
+        # Check comments_raw for error details to enrich the message
+        error_hint = ""
+        if raw.comments_raw:
+            err_parts = [c for c in raw.comments_raw if "error" in str(c).lower() or "fail" in str(c).lower()]
+            if err_parts:
+                error_hint = f" [{err_parts[0][:100]}]"
         return PipelineResult(
             flow="passive_analysis", started_at=started,
             finished_at=datetime.now().isoformat(), success=False,
-            errors=["Fetch returned empty content"],
+            errors=[f"[{platform}] Fetch returned empty content for {url}{error_hint}"],
         )
 
-    # ── Stage 2: Analyst ──────────────────────────────────────────────
+    # ── Stage 2: Sentinel pre-filter (v6.0) ─────────────────────────────
     if progress_callback:
-        progress_callback("annotate", "LLM标注中...")
+        progress_callback("sentinel", "预筛选...")
+    try:
+        from agents.sentinel import screen_content
+        sentinel_result = screen_content(raw.content, raw.platform)
+    except Exception:
+        sentinel_result = None  # Degrade gracefully if sentinel fails
+
+    # Reject — skip entire pipeline
+    if sentinel_result and sentinel_result.verdict == "reject":
+        return PipelineResult(
+            flow="passive_analysis", started_at=started,
+            finished_at=datetime.now().isoformat(), success=True,
+            errors=[f"[{raw.platform}] Sentinel rejected: {sentinel_result.reason}"],
+        )
+
+    # ── Stage 3: Analyst ──────────────────────────────────────────────
+    if progress_callback:
+        progress_callback("annotate", "LLM标注中..." if not (
+            sentinel_result and sentinel_result.verdict == "fast_track"
+        ) else "快速通道标注中...")
     try:
         from agents.analyst import annotate
-        annotation = annotate(raw)
+        if sentinel_result and sentinel_result.verdict == "fast_track":
+            annotation = annotate(raw, use_llm=False, sentinel_result=sentinel_result)
+        else:
+            annotation = annotate(raw)
     except Exception as e:
-        errors.append(f"Analyst error: {e}")
-        annotation = Annotation(
-            url=url, platform=raw.platform, severity="P2",
-            severity_reason=f"[Analyst failed: {e}]", sentiment="中性",
-            risk_tags=[], triage="内部研判", comment_risk="绿", summary="",
+        return PipelineResult(
+            flow="passive_analysis", started_at=started,
+            finished_at=datetime.now().isoformat(), success=False,
+            errors=[f"[{raw.platform}] Analyst error for {url}: {e}"],
         )
 
     # P0/P1 meltdown
@@ -273,7 +274,7 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
     try:
         from agents.curator import ingest
         kb_entry = ingest(raw, annotation, notes=pipeline_notes,
-                          init_status=init_status) if action_plan else None
+                          init_status=init_status)
     except Exception as e:
         errors.append(f"Curator error: {e}")
         kb_entry = None
@@ -292,14 +293,20 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
 
 
 # ── Flow B: Active monitoring ─────────────────────────────────────────
-def run_active_monitor(pipeline_notes: str = "") -> PipelineResult:
-    """Scheduled keyword search → batch pipeline: Monitor → [for each] → Flow A."""
+def run_active_monitor(pipeline_notes: str = "",
+                       date_from: str = "", date_to: str = "") -> PipelineResult:
+    """Scheduled keyword search -> batch pipeline: Monitor -> [for each] -> Flow A.
+
+    Args:
+        date_from: YYYY-MM-DD, passed through to execute_job for date-range mode.
+        date_to: YYYY-MM-DD, passed through to execute_job for date-range mode.
+    """
     started = datetime.now().isoformat()
     errors = []
 
     try:
         from agents.monitor import execute_job
-        harvest = execute_job()
+        harvest = execute_job(date_from=date_from, date_to=date_to)
     except Exception as e:
         return PipelineResult(
             flow="active_monitor", started_at=started,
@@ -308,10 +315,12 @@ def run_active_monitor(pipeline_notes: str = "") -> PipelineResult:
         )
 
     # For each new item, run passive analysis
+    item_results = []
     for kr in harvest.keyword_results:
         for item in kr.new_items:
             try:
                 result = run_passive_analysis(item.url, pipeline_notes=pipeline_notes)
+                item_results.append(result)
                 if result.emergency_triggered:
                     errors.append(f"P0/P1 meltdown triggered: {item.url}")
                 if not result.success:
@@ -325,20 +334,27 @@ def run_active_monitor(pipeline_notes: str = "") -> PipelineResult:
         finished_at=datetime.now().isoformat(),
         success=len(errors) == 0,
         errors=errors if errors else [],
+        item_results=item_results,
     )
 
 
 # ── Flow C: Daily report generation ────────────────────────────────────
 def run_daily_report(date_str: str = "") -> str:
     """Generate daily report via Daily Report Agent. Returns path to report file."""
-    from agents.daily_report import generate_daily
-    return generate_daily(date_str)
+    try:
+        from agents.daily_report import generate_daily
+        return generate_daily(date_str)
+    except Exception as e:
+        return f"日报生成失败: {e}"
 
 
 def run_monthly_report(month_str: str = "") -> str:
     """Generate monthly report via Daily Report Agent. Returns path to report file."""
-    from agents.daily_report import generate_monthly
-    return generate_monthly(month_str)
+    try:
+        from agents.daily_report import generate_monthly
+        return generate_monthly(month_str)
+    except Exception as e:
+        return f"月报生成失败: {e}"
 
 
 # ── Flow D: Knowledge base Q&A ────────────────────────────────────────

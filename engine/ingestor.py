@@ -226,6 +226,12 @@ PLATFORM_SUBDIR = {
     "xiaohongshu": "xiaohongshu",
     "douyin": "douyin",
     "youtube": "youtube",
+    "B站": "bilibili",
+    "bilibili": "bilibili",
+    "微博": "weibo",
+    "weibo": "weibo",
+    "微信公众号": "wechat",
+    "wechat": "wechat",
 }
 
 

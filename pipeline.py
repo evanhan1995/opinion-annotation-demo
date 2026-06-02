@@ -156,6 +156,18 @@ def _run_pipeline():
     sort_pref = _pipeline_status.sort_preference
     severity_counts = {"P0": 0, "P1": 0, "P2": 0, "P3": 0}
 
+    # Read last patrol time for date-range mode (same as scheduler)
+    import json as _json
+    last_path = PROJECT_ROOT / "config" / "last_patrol.json"
+    date_from = ""
+    date_to = datetime.now().strftime("%Y-%m-%d")
+    if last_path.exists():
+        try:
+            data = _json.loads(last_path.read_text(encoding="utf-8"))
+            date_from = data.get("last_patrol_date", "")
+        except Exception:
+            pass
+
     try:
         # Step 1: Monitor — search once, store harvest globally
         _update_step("monitor", "running", details="正在执行关键词巡检...")
@@ -171,7 +183,8 @@ def _run_pipeline():
             _exec = futures.ThreadPoolExecutor(max_workers=1)
             try:
                 _fut = _exec.submit(execute_job, progress_callback=_monitor_progress,
-                                    sort_preference=sort_pref)
+                                    sort_preference=sort_pref,
+                                    date_from=date_from, date_to=date_to)
                 harvest = _fut.result(timeout=_MONITOR_HARD_TIMEOUT)
             except futures.TimeoutError:
                 _update_step("monitor", "error", error="Monitor搜索超时(120s)，跳过")

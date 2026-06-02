@@ -200,6 +200,33 @@ class KBEntry:
     file_path: str = ""
 
 
+@dataclass
+class SentinelResult:
+    """Sentinel Agent pre-filter verdict (PRD v6.0).
+
+    verdict:
+      "pass"        — normal content, proceed to Analyst (LLM)
+      "reject"      — spam/ad/gray market, skip entire pipeline
+      "fast_track"  — obvious sentiment, skip LLM, use suggested_* fields
+    """
+    verdict: str            # "pass" | "reject" | "fast_track"
+    reason: str             # human-readable explanation
+    spam_score: float = 0.0       # 0.0-1.0 estimated spam probability
+    suggested_sentiment: str = ""  # for fast_track: 正面/中性/负面
+    suggested_severity: str = ""   # for fast_track: P0/P1/P2/P3
+    rule_hits: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ForumResult:
+    """Forum Agent cross-validation result (PRD v6.0)."""
+    case_id: str
+    related_cases: list[str] = field(default_factory=list)  # linked case IDs
+    contradictions: list[str] = field(default_factory=list)  # discrepancy descriptions
+    host_verdict: str = ""  # Forum Host LLM summary
+    needs_review: bool = False  # flag for manual review
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Shared conversion functions (single source of truth for all agents)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -207,6 +234,7 @@ class KBEntry:
 # Platform name mapping: agent key ↔ engine Chinese label
 PLATFORM_KEY_TO_LABEL = {
     "youtube": "YouTube", "xiaohongshu": "小红书", "douyin": "抖音",
+    "bilibili": "B站", "weibo": "微博", "wechat": "微信公众号",
 }
 PLATFORM_LABEL_TO_KEY = {v: k for k, v in PLATFORM_KEY_TO_LABEL.items()}
 

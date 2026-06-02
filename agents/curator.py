@@ -202,6 +202,14 @@ def update_case_status(case_id: str, new_status: str, notes: str = "") -> dict:
     else:
         # No status field yet — append one before the closing ---
         fm_updated = fm.rstrip() + f"\nstatus: {new_status}"
+
+    # Also update notes if provided
+    if notes:
+        if re.search(r"^notes:", fm_updated, re.MULTILINE):
+            fm_updated = re.sub(r"^notes:.*$", f"notes: {notes}", fm_updated, flags=re.MULTILINE)
+        else:
+            fm_updated = fm_updated.rstrip() + f"\nnotes: {notes}"
+
     updated_text = f"---{fm_updated}---{parts[2]}"
     case_path.write_text(updated_text, encoding="utf-8")
 
@@ -452,7 +460,7 @@ def search(query: str, top_n: int = 5) -> list[dict]:
     try:
         from engine.agent import search_wiki
         results = search_wiki(query, top_n)
-        return [{"title": r[0], "snippet": r[1][:200], "url": r[2]} for r in results]
+        return [{"title": r["title"], "snippet": r["excerpt"][:200], "url": r["path"]} for r in results]
     except Exception:
         return [{"title": "search error", "snippet": f"Query: {query}", "url": ""}]
 

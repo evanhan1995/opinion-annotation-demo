@@ -34,6 +34,7 @@ def _parse_frontmatter(content: str) -> dict:
                     key = key.strip()
                     val = val.strip()
                     if key in ("title", "type", "severity", "action", "platform",
+                               "status", "case_id", "url", "category",
                                "tags", "confidence", "created", "updated"):
                         meta[key] = val
             meta["_body"] = parts[2].strip()
@@ -90,6 +91,9 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
                 score += body_lower.count(token)
 
             if score > 0:
+                # Case files get 1.5x boost — they carry the factual data users ask about
+                if dirname == "cases":
+                    score = int(score * 1.5)
                 excerpt = meta["_body"][:200].replace("\n", " ")
                 results.append({
                     "path": f"{dirname}/{f.name}",
@@ -115,7 +119,9 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
         dir_path = WIKI_DIR / dirname
         if not dir_path.exists():
             continue
-        for f in sorted(dir_path.glob("*.md")):
+        # cases/ uses platform subdirectories (douyin/, wechat/, etc.) — need recursive
+        glob_fn = dir_path.rglob if dirname == "cases" else dir_path.glob
+        for f in sorted(glob_fn("*.md")):
             _score_and_add(f, dirname)
 
     results.sort(key=lambda r: r["score"], reverse=True)
@@ -224,6 +230,50 @@ def build_agent_context(results: list[dict], expand_syntheses: bool = True) -> s
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Query helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_STATS_KEYWORDS = [
+    "多少", "几个", "统计", "分布", "大部分", "占比", "比例",
+    "数量", "汇总", "哪些", "什么状态", "情况如何", "怎么样",
+    "有多少", "几件", "几条", "几个平台", "现状",
+]
+
+
+def _is_stats_query(query: str) -> bool:
+    return any(kw in query for kw in _STATS_KEYWORDS)
+
+
+def _build_search_stats(results: list[dict]) -> str:
+    """Build a structured stats summary from case files in search results."""
+    case_results = [r for r in results if r.get("dirname") == "cases"]
+    if len(case_results) < 2:
+        return ""
+
+    status_counts: dict[str, int] = {}
+    sev_counts: dict[str, int] = {}
+    platform_counts: dict[str, int] = {}
+
+    for r in case_results:
+        fm = r.get("frontmatter", {})
+        st = fm.get("status", "?")
+        sev = fm.get("severity", "?")
+        pf = fm.get("platform", "?")
+        status_counts[st] = status_counts.get(st, 0) + 1
+        sev_counts[sev] = sev_counts.get(sev, 0) + 1
+        platform_counts[pf] = platform_counts.get(pf, 0) + 1
+
+    lines = [
+        f"\n## 📊 搜索命中案例统计（共命中 {len(case_results)} 个案例）\n",
+        f"- 状态分布: {', '.join(f'{k} {v}条' for k, v in sorted(status_counts.items(), key=lambda x: -x[1]))}",
+        f"- 严重度分布: {', '.join(f'{k} {v}条' for k, v in sorted(sev_counts.items()))}",
+        f"- 平台分布: {', '.join(f'{k} {v}条' for k, v in sorted(platform_counts.items(), key=lambda x: -x[1]))}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Query API
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -231,7 +281,7 @@ def ask_agent(
     query: str,
     config: dict,
     chat_history: Optional[list[dict]] = None,
-    max_search: int = 5,
+    max_search: int = 15,
 ) -> dict:
     """Answer a question using the wiki knowledge base.
 
@@ -256,6 +306,12 @@ def ask_agent(
 
     # Step 2: Build prompt
     context = build_agent_context(results)
+
+    # Inject structured stats for aggregate queries (counts, distributions, etc.)
+    if _is_stats_query(query):
+        stats_block = _build_search_stats(results)
+        if stats_block:
+            context = stats_block + "\n---\n" + context
 
     messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
     if chat_history:

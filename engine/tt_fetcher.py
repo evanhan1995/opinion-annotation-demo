@@ -10,6 +10,7 @@ Architecture (information-theoretic channel isolation):
 Cookie lifecycle mirrors xhs_fetcher.py: cache → expire check → prompt refresh.
 """
 
+import io
 import json
 import sys
 import time
@@ -17,13 +18,28 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+import engine._compat
 
 ENGINE_DIR = Path(__file__).resolve().parent
 
-# TikTokDownloader path
-_TT_DOWNLOADER_PATH = Path("D:/Claude code/Github skills/TikTokDownloader")
+# TikTokDownloader path — config.json → env var → default
+def _load_tt_path_config() -> str:
+    """Load TikTokDownloader path from config or env."""
+    import os as _os
+    env_val = _os.environ.get("TIKTOK_DOWNLOADER_PATH", "")
+    if env_val:
+        return env_val
+    config_path = ENGINE_DIR / "config.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            return cfg.get("paths", {}).get("tiktok_downloader",
+                "D:/Claude code/Github skills/TikTokDownloader")
+        except (json.JSONDecodeError, OSError):
+            pass
+    return "D:/Claude code/Github skills/TikTokDownloader"
+
+_TT_DOWNLOADER_PATH = Path(_load_tt_path_config())
 _TT_AVAILABLE = False
 if _TT_DOWNLOADER_PATH.exists():
     _tt_src = str(_TT_DOWNLOADER_PATH)
@@ -86,12 +102,115 @@ def _cookie_str(d: dict) -> str:
 
 
 def _check_cookie_valid() -> bool:
-    """Quick validity check: do we have core auth cookies?"""
+    """Quick validity check: do we have actual session cookies (not just device fingerprint)?"""
     c = _load_tt_cookie()
     if not c:
         return False
-    required = ["passport_csrf_token", "s_v_web_id"]
-    return all(k in c for k in required)
+    # Must have at least one real session cookie — CSRF/fingerprint alone is not enough
+    session_keys = ["sessionid_ss", "sid_guard", "sessionid"]
+    return any(k in c for k in session_keys)
+
+
+def _save_tt_cookies_to_settings(cookie_dict: dict):
+    """Write cookie dict to TikTokDownloader's settings.json."""
+    settings_path = _TT_DOWNLOADER_PATH / "Volume" / "settings.json"
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+        except (json.JSONDecodeError, KeyError):
+            data = {}
+        data["cookie"] = cookie_dict
+        settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
+
+
+def _save_tt_cookie_to_config(cookie_str: str):
+    """Save douyin cookie string to engine/config.json douyin.cookie."""
+    config_path = ENGINE_DIR / "config.json"
+    cfg = {}
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, KeyError):
+            pass
+    cfg["douyin"] = cfg.get("douyin", {})
+    cfg["douyin"]["cookie"] = cookie_str
+    config_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def bootstrap_douyin_cookies(force: bool = False) -> Optional[str]:
+    """Open visible browser to douyin.com, wait for user to log in, save cookies.
+
+    Similar to XHS bootstrap_cookies(). Opens a visible Chromium window.
+    User scans QR code / logs in → cookies captured → saved to:
+      - TikTokDownloader/settings.json (for tt_fetcher.py)
+      - engine/config.json douyin.cookie (for monitor.py search)
+
+    Returns cookie string on success, None on failure/timeout.
+    """
+    if not force:
+        c = _load_tt_cookie()
+        if c and _check_cookie_valid():
+            return _cookie_str(c)
+
+    from engine.browser_pool import launch_context
+
+    ctx, browser, pw = launch_context(headless=False, stealth=False)
+    try:
+        page = ctx.new_page()
+        page.goto("https://www.douyin.com", timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+
+        # Check if already logged in
+        logged_in = False
+        try:
+            # Look for user avatar/menu — indicates logged-in state
+            page.wait_for_selector(
+                "xpath=//*[contains(@class, 'avatar') or contains(@id, 'user-info') or contains(@class, 'user-info')]",
+                timeout=5000,
+            )
+            logged_in = True
+            print("[Douyin] Already logged in (detected user avatar).")
+        except Exception:
+            pass
+
+        if not logged_in:
+            print("[Douyin] Not logged in. Please scan QR code in the browser window...")
+            print("[Douyin] Waiting up to 120 seconds for login...")
+
+        # Wait for login by polling for session cookies
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            cookies = ctx.cookies()
+            session_cookies = {c["name"]: c["value"] for c in cookies}
+            # Must have actual session cookies (not just CSRF/fingerprint)
+            has_session = any(
+                k in session_cookies for k in ["sessionid_ss", "sid_guard", "sessionid"]
+            )
+            if has_session:
+                print("[Douyin] Login detected! Saving cookies...")
+                break
+            time.sleep(2)
+        else:
+            print("[Douyin] Login timeout (120s). Please try again.")
+            return None
+
+        # Save all cookies
+        cookies = ctx.cookies()
+        cookie_dict = {c["name"]: c["value"] for c in cookies}
+        cookie_str = _cookie_str(cookie_dict)
+
+        # Persist to both locations
+        _save_tt_cookies_to_settings(cookie_dict)
+        _save_tt_cookie_to_config(cookie_str)
+        TT_COOKIE_FILE.write_text(json.dumps({"cookie_str": cookie_str, "saved_at": time.time()}, ensure_ascii=False), encoding="utf-8")
+        print(f"[Douyin] Cookies saved ({len(cookie_dict)} pairs). Search should work now.")
+        return cookie_str
+    finally:
+        if browser:
+            browser.close()
+        else:
+            ctx.close()
+        pw.stop()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -108,6 +227,7 @@ def _fetch_douyin_metadata(video_id: str) -> Optional[dict]:
         async with _TTApp() as app:
             app.check_config()
             await app.check_settings(False)
+            await app.parameter.update_params()
             from src.interface import Detail
             detail = Detail(app.parameter, detail_id=video_id)
             result = await detail.run(
@@ -139,6 +259,7 @@ def _fetch_douyin_comments(video_id: str, max_count: int = 10) -> list:
         async with _TTApp() as app:
             app.check_config()
             await app.check_settings(False)
+            await app.parameter.update_params()
             from src.interface import Comment
             c = Comment(
                 app.parameter,

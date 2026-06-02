@@ -45,6 +45,9 @@ def render_tab4():
     total_pending = sum(1 for c in all_cases if c["status"] == "待跟进")
     total_in_progress = sum(1 for c in all_cases if c["status"] == "处理中")
     total_overdue = len(overdue_cases)
+    total_resolved = sum(1 for c in all_cases if c["status"] == "已处理")
+    total_ignored = sum(1 for c in all_cases if c["status"] == "忽略")
+    total_abandoned = sum(1 for c in all_cases if c["status"] == "已放弃")
 
     dash_col1, dash_col2, dash_col3 = st.columns(3)
     with dash_col1:
@@ -64,6 +67,23 @@ def render_tab4():
                      type="secondary" if total_overdue == 0 else "primary"):
             st.session_state["disp_status_filter"] = "待跟进"
             st.session_state["_show_overdue_only"] = True
+            st.rerun()
+
+    dash_col4, dash_col5, dash_col6 = st.columns(3)
+    with dash_col4:
+        if st.button(f"✅ 已处理\n\n**{total_resolved}**", key="dash_resolved",
+                     use_container_width=True, help="点击查看已处理案例"):
+            st.session_state["disp_status_filter"] = "已处理"
+            st.rerun()
+    with dash_col5:
+        if st.button(f"🚫 已忽略\n\n**{total_ignored}**", key="dash_ignored",
+                     use_container_width=True, help="点击查看已忽略案例"):
+            st.session_state["disp_status_filter"] = "忽略"
+            st.rerun()
+    with dash_col6:
+        if st.button(f"❌ 已放弃\n\n**{total_abandoned}**", key="dash_abandoned",
+                     use_container_width=True, help="点击查看已放弃案例"):
+            st.session_state["disp_status_filter"] = "已放弃"
             st.rerun()
 
     # ── Filters ───────────────────────────────────────────────────────
@@ -133,10 +153,6 @@ def render_tab4():
                         )
                         if result.get("success"):
                             st.success(f"已更新: {case['status']} → {new_status}")
-                            # Clear widget keys so they re-create with defaults on rerun
-                            st.session_state.pop("disp_status_filter", None)
-                            st.session_state.pop("disp_sev_filter", None)
-                            st.session_state.pop("_show_overdue_only", None)
                             st.rerun()
                         else:
                             st.error(result.get("error", "更新失败"))

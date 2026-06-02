@@ -25,16 +25,28 @@ from agents.shared import RawData, engine_dict_to_rawdata
 
 
 # ── Platform detection ──────────────────────────────────────────────────
+# Map engine's Chinese platform labels to short keys used by agent dispatchers
+_PLATFORM_LABEL_TO_KEY = {
+    "小红书": "xiaohongshu",
+    "抖音": "douyin",
+    "YouTube": "youtube",
+    "B站": "bilibili",
+    "微博": "weibo",
+    "微信公众号": "wechat",
+    "X": "x",
+    "X (Twitter)": "x",
+    "Reddit": "reddit",
+    "Instagram": "instagram",
+    "TikTok": "tiktok",
+    "通用网页": "unknown",
+}
+
+
 def detect_platform(url: str) -> str:
-    """Detect platform from URL."""
-    url_lower = url.lower()
-    if "xiaohongshu.com" in url_lower or "xhslink.com" in url_lower:
-        return "xiaohongshu"
-    if "douyin.com" in url_lower or "tiktok.com" in url_lower:
-        return "douyin"
-    if "youtube.com" in url_lower or "youtu.be" in url_lower:
-        return "youtube"
-    return "unknown"
+    """Detect platform from URL. Delegates to engine._detect_platform."""
+    from engine.scraper import _detect_platform
+    engine_label = _detect_platform(url)
+    return _PLATFORM_LABEL_TO_KEY.get(engine_label, "unknown")
 
 
 # ── Per-platform fetchers ───────────────────────────────────────────────
@@ -56,12 +68,33 @@ def _fetch_youtube(url: str) -> RawData:
     return engine_dict_to_rawdata(result, url)
 
 
+def _fetch_bilibili(url: str) -> RawData:
+    from engine.scraper import scrape
+    result = scrape(url)
+    return engine_dict_to_rawdata(result, url)
+
+
+def _fetch_weibo(url: str) -> RawData:
+    from engine.scraper import scrape
+    result = scrape(url)
+    return engine_dict_to_rawdata(result, url)
+
+
+def _fetch_wechat(url: str) -> RawData:
+    from engine.scraper import scrape
+    result = scrape(url)
+    return engine_dict_to_rawdata(result, url)
+
+
 # Only 3 platforms active (PRD §1.3). Reddit/X in engine/scraper.py are
 # preserved but not wired — restore when Platform Expansion hits Phase 6-7.
 _FETCHERS = {
     "xiaohongshu": _fetch_xhs,
     "douyin": _fetch_douyin,
     "youtube": _fetch_youtube,
+    "bilibili": _fetch_bilibili,
+    "weibo": _fetch_weibo,
+    "wechat": _fetch_wechat,
 }
 
 

@@ -93,12 +93,17 @@ def run_monthly_report():
         print(f"  月报生成失败: {e}")
 
 
-def run_monitor():
-    """Execute keyword-based active monitoring."""
+def run_monitor(date_from: str = "", date_to: str = ""):
+    """Execute keyword-based active monitoring.
+
+    Args:
+        date_from: YYYY-MM-DD start date for date-range mode.
+        date_to: YYYY-MM-DD end date for date-range mode.
+    """
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Monitor 巡检中...")
     try:
         from agents.orchestrator import run_active_monitor
-        result = run_active_monitor()
+        result = run_active_monitor(date_from=date_from, date_to=date_to)
         if result.success:
             print(f"  巡检完成: {result.errors if result.errors else '无告警'}")
         else:
@@ -324,9 +329,25 @@ def _wrapped_run_pipeline():
         _scheduler_status["errors"].append(f"流水线失败: {e}")
 
 def _wrapped_run_monitor():
+    # Read last patrol time for date-range mode
+    last_path = PROJECT_ROOT / "config" / "last_patrol.json"
+    date_from = ""
+    date_to = datetime.now().strftime("%Y-%m-%d")
+    if last_path.exists():
+        try:
+            data = json.loads(last_path.read_text(encoding="utf-8"))
+            date_from = data.get("last_patrol_date", "")
+        except Exception:
+            pass
     try:
-        run_monitor()
+        run_monitor(date_from=date_from, date_to=date_to)
         _scheduler_status["last_monitor"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Write patrol end time
+        last_path.parent.mkdir(parents=True, exist_ok=True)
+        last_path.write_text(json.dumps({
+            "last_patrol_end": datetime.now().isoformat(),
+            "last_patrol_date": datetime.now().strftime("%Y-%m-%d"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         _scheduler_status["errors"].append(f"巡检失败: {e}")
 
