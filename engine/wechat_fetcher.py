@@ -153,11 +153,65 @@ def search_wechat_articles(keyword: str, count: int = 20, sort_type: str = "hot"
     return results[:count]
 
 
+def _extract_permanent_url(page) -> str:
+    """Extract the permanent article URL (with __biz) from a loaded WeChat page.
+
+    Two scenarios:
+    1. Sogou intermediate page (weixin.sogou.com/link?url=...): the page
+       holds window.biz/mid/idx/sn — construct the canonical URL from those.
+    2. Direct WeChat article page (mp.weixin.qq.com): the page may expose
+       msg_link / content_url / share_url JS globals, or og:url meta tag.
+
+    WeChat /s?src=11&timestamp=... URLs are session-bound temporary links
+    that show "参数错误" when opened outside the search Referer chain.
+    """
+    try:
+        js_vars = page.evaluate("""() => {
+            const result = {};
+            // Sogou intermediate page exposes these window globals
+            if (typeof biz !== 'undefined') result.biz = biz;
+            if (typeof mid !== 'undefined') result.mid = mid;
+            if (typeof idx !== 'undefined') result.idx = idx;
+            if (typeof sn !== 'undefined') result.sn = sn;
+            // Direct WeChat page JS globals
+            if (typeof msg_link !== 'undefined') result.msg_link = msg_link;
+            if (typeof content_url !== 'undefined') result.content_url = content_url;
+            if (typeof share_url !== 'undefined') result.share_url = share_url;
+            // Meta og:url fallback
+            const meta = document.querySelector('meta[property="og:url"]');
+            if (meta && meta.content) result.og_url = meta.content;
+            return result;
+        }""")
+        # Sogou intermediate page: construct permanent URL from window globals.
+        # sn can be empty (some articles don't have it); biz/mid/idx are required.
+        if js_vars.get("biz") and js_vars.get("mid") and js_vars.get("idx"):
+            biz = str(js_vars["biz"])
+            mid_val = str(js_vars["mid"])
+            idx_val = str(js_vars["idx"])
+            sn = str(js_vars.get("sn", ""))
+            url = f"https://mp.weixin.qq.com/s?__biz={biz}&mid={mid_val}&idx={idx_val}"
+            if sn:
+                url += f"&sn={sn}"
+            return url
+        # Direct WeChat page: check known JS globals
+        for key in ("msg_link", "content_url", "share_url", "og_url"):
+            url = str(js_vars.get(key, "")).strip().replace("http://", "https://")
+            if "__biz" in url and "mp.weixin.qq.com" in url:
+                return url
+    except Exception:
+        pass
+    return ""
+
+
 def _resolve_sogou_url(search_page, sogou_url: str) -> str:
     """Click a Sogou redirect link to resolve the real mp.weixin.qq.com article URL.
 
     Sogou blocks direct navigation to /link?url=... with an anti-spider page.
     Clicking the link on the search results page (with Referer) works.
+
+    After the page loads, extracts the permanent __biz-based URL from page JS
+    (WeChat /s?src=11&timestamp=... links are session-bound and won't open
+    outside the search context).
     """
     try:
         link_el = search_page.query_selector(f'a[href="{sogou_url}"]')
@@ -179,9 +233,16 @@ def _resolve_sogou_url(search_page, sogou_url: str) -> str:
         try:
             new_page.wait_for_load_state("domcontentloaded", timeout=15000)
             new_page.wait_for_timeout(2000)
-            final_url = new_page.url
-            if "mp.weixin.qq.com" in final_url:
-                return final_url
+
+            # Try extracting permanent URL first (works on both Sogou
+            # intermediate pages and direct WeChat article pages).
+            permanent = _extract_permanent_url(new_page)
+            if permanent:
+                new_page.close()
+                return permanent
+
+            if "mp.weixin.qq.com" in new_page.url:
+                return new_page.url
         finally:
             new_page.close()
     except Exception:
