@@ -1,4 +1,6 @@
 ---
+
+
 title: 叙事分类词表
 type: taxonomy
 taxonomy_type: narrative_category
@@ -7,17 +9,7 @@ created: 2026-06-02
 updated: 2026-06-02
 ---
 
-# 叙事分类
-
-<!--
-  格式说明:
-  ## L1分类名
-  - **定义**: 一句话说明
-  - **子类**:
-    - L2子类名 (关键词1, 关键词2, 关键词3)
-  
-  LLM标注时: 从子类中选择最匹配的，格式为 "L1/L2"
--->
+# Narrative Categories
 
 ## 产品质量
 - **定义**: 涉及产品功能、安全、质量的舆情事件
