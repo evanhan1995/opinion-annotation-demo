@@ -398,6 +398,15 @@ def _generate_auto_case(
     authenticity = annotation_result.get("真实性评估", {}).get("判断", "未评估")
     tags = annotation_result.get("风险标签", [])
 
+    # Phase 1: controlled vocabulary fields
+    narrative_thread = annotation_result.get("叙事分类", "")
+    secondary_threads = annotation_result.get("次要叙事", [])
+    if isinstance(secondary_threads, str):
+        secondary_threads = [s.strip() for s in secondary_threads.split(",") if s.strip()]
+    risk_tags_controlled = annotation_result.get("风险标签_受控", tags)[:3]
+    risk_tags_candidate = annotation_result.get("风险标签_候选", [])
+    target_type = annotation_result.get("目标类型", "我方")
+
     ai_output_clean = {k: v for k, v in annotation_result.items() if k != "_meta"}
     ai_output_json = json.dumps(ai_output_clean, ensure_ascii=False, indent=2)
 
@@ -417,6 +426,15 @@ def _generate_auto_case(
     cats = annotation_result.get("舆情分类", [])
     cat_line = f"categories: [{', '.join(cats)}]" if cats else ""
     author_line = f"author: \"[[authors/{author_file}]]\"" if author_file else ""
+
+    # Phase 1: controlled vocabulary frontmatter fields
+    nt_line = f"narrative_thread: {narrative_thread}" if narrative_thread else ""
+    st_lines = "\n".join(f"  - {s}" for s in secondary_threads[:2]) if secondary_threads else ""
+    sec_line = f"secondary_threads:\n{st_lines}" if st_lines else ""
+    rtc_line = f"risk_tags_controlled: [{', '.join(risk_tags_controlled)}]" if risk_tags_controlled else ""
+    rtx_line = f"risk_tags_candidate: [{', '.join(risk_tags_candidate)}]" if risk_tags_candidate else ""
+    tt_line = f"target_type: {target_type}"
+
     content = f"""---
 title: 案例{case_id.split('-')[1]}: {title_text}
 type: case
@@ -429,6 +447,11 @@ status: {init_status}
 {url_line}
 {cat_line}
 {author_line}
+{nt_line}
+{sec_line}
+{rtc_line}
+{rtx_line}
+{tt_line}
 notes: {notes}
 tags: [auto_ingest, {severity}]
 ---
@@ -457,7 +480,9 @@ tags: [auto_ingest, {severity}]
 - **严重度判决**：{severity_reason}
 - **分流判决**：{action_reason}
 - **真实性判断**：{authenticity}
-- **风险标签**：{', '.join(tags) if tags else '(无)'}
+- **风险标签（受控）**：{', '.join(risk_tags_controlled) if risk_tags_controlled else '(无)'}
+- **风险标签（候选）**：{', '.join(risk_tags_candidate) if risk_tags_candidate else '(无)'}
+- **叙事分类**：{narrative_thread or '未分类'}{f' (次要: {", ".join(secondary_threads[:2])})' if secondary_threads else ''}
 
 ## 边界讨论
 
@@ -518,8 +543,9 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
     action = annotation_result.get("分流建议", "?")
     platform = (scraped_data or {}).get("来源平台", annotation_result.get("来源平台", "?"))
     title = annotation_result.get("摘要", "auto-ingest")[:40]
-    tags = annotation_result.get("风险标签", [])
+    tags = annotation_result.get("风险标签_受控", annotation_result.get("风险标签", []))[:3]
     categories = annotation_result.get("舆情分类", [])
+    narrative_thread = annotation_result.get("叙事分类", "")
 
     update_case_index(
         new_filename=new_filename,
@@ -530,6 +556,7 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
         tags=tags,
         categories=categories,
         source="auto_ingest",
+        narrative_thread=narrative_thread,
     )
 
 
