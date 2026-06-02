@@ -260,6 +260,7 @@ def _parse_case_frontmatter(filepath: Path) -> dict:
         "title": "", "severity": "", "status": "待跟进", "platform": "",
         "url": "", "sentiment": "", "category": "", "created": "",
         "ingested_at": "", "assigned_date": "", "notes": "", "author": "",
+        "narrative_thread": "", "secondary_threads": "", "target_type": "",
     }
     try:
         text = filepath.read_text(encoding="utf-8")
@@ -307,6 +308,10 @@ def query_cases(filters: dict | None = None) -> list[dict]:
         if "assigned_before" in filters and c["assigned_date"]:
             if c["assigned_date"] >= filters["assigned_before"]:
                 continue
+        if "narrative" in filters and filters["narrative"]:
+            nt = c.get("narrative_thread", "")
+            if filters["narrative"] not in nt:
+                continue
         cases.append(c)
     return cases
 
@@ -319,13 +324,14 @@ def query_stats(date_from: str = "", date_to: str = "") -> dict:
         date_to: optional ISO date string to filter cases ingested on/before this date
 
     Returns dict with: total_cases, severity_dist, sentiment_dist,
-    platform_dist, status_dist, top_categories, p0_p1_list.
+    platform_dist, status_dist, top_categories, p0_p1_list, narrative_dist.
     """
     severity_dist = {"P0": 0, "P1": 0, "P2": 0, "P3": 0}
     sentiment_dist = {"正面": 0, "中性": 0, "负面": 0}
     platform_dist: dict[str, int] = {}
     status_dist = {"待跟进": 0, "处理中": 0, "已处理": 0, "已放弃": 0, "忽略": 0}
     categories: dict[str, int] = {}
+    narrative_dist: dict[str, int] = {}
     p0_p1_list: list[dict] = []
 
     for fp in _find_case_files():
@@ -357,6 +363,12 @@ def query_stats(date_from: str = "", date_to: str = "") -> dict:
         if cat and cat != "其他":
             categories[cat] = categories.get(cat, 0) + 1
 
+        # Phase 1: narrative distribution
+        nt = c.get("narrative_thread", "")
+        if nt:
+            n_l1 = nt.split("/")[0] if "/" in nt else nt
+            narrative_dist[n_l1] = narrative_dist.get(n_l1, 0) + 1
+
         if sev in ("P0", "P1"):
             p0_p1_list.append({
                 "severity": sev, "title": c["title"],
@@ -371,6 +383,7 @@ def query_stats(date_from: str = "", date_to: str = "") -> dict:
         "status_dist": status_dist,
         "top_categories": sorted(categories, key=categories.get, reverse=True)[:5],
         "p0_p1_list": p0_p1_list,
+        "narrative_dist": narrative_dist,
     }
 
 

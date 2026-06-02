@@ -62,6 +62,43 @@ def _tokenize_query(query: str) -> list[str]:
     return tokens
 
 
+def _expand_taxonomy_tokens(tokens: list[str]) -> None:
+    """Expand search tokens with matching taxonomy labels (in-place).
+
+    If a token matches a taxonomy keyword (e.g. '食品安全'), add the
+    full narrative label to boost related case recall.
+    """
+    try:
+        from engine.taxonomy_mgr import load_taxonomy
+        nt = load_taxonomy("narrative_categories")
+        rt = load_taxonomy("risk_tags")
+        expanded = []
+        query_text = "".join(tokens)
+        for tax in (nt, rt):
+            for l1 in tax.nodes:
+                for l2 in l1.children:
+                    # Match query against L2 keywords
+                    for kw in l2.keywords:
+                        if kw in query_text:
+                            if tax.taxonomy_type == "narrative_category":
+                                expanded.append(f"{l1.name}/{l2.name}")
+                            else:
+                                expanded.append(l2.name)
+                            break
+                    # Match query against L2 name itself
+                    if l2.name in query_text:
+                        if tax.taxonomy_type == "narrative_category":
+                            expanded.append(f"{l1.name}/{l2.name}")
+                        else:
+                            expanded.append(l2.name)
+        # Add expanded tokens (avoid dups)
+        for t in expanded:
+            if t not in tokens:
+                tokens.append(t)
+    except Exception:
+        pass  # taxonomy not available, skip expansion
+
+
 def search_wiki(query: str, max_results: int = 5) -> list[dict]:
     """Search wiki pages by keyword relevance.
 
@@ -71,6 +108,9 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
     tokens = _tokenize_query(query)
     if not tokens:
         return []
+
+    # Phase 1: taxonomy-aware query expansion
+    _expand_taxonomy_tokens(tokens)
 
     def _score_and_add(f: Path, dirname: str) -> None:
         """Score a single file and add to results if relevant."""
