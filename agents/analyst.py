@@ -35,9 +35,18 @@ ANALYST_SYSTEM_PROMPT = ""  # Loaded lazily from prompts/analyst_system.txt
 
 
 def _get_prompt() -> str:
+    """Load analyst system prompt with taxonomy section injected (Phase 1)."""
     global ANALYST_SYSTEM_PROMPT
     if not ANALYST_SYSTEM_PROMPT:
         ANALYST_SYSTEM_PROMPT = load_prompt("analyst_system")
+        try:
+            from engine.taxonomy_mgr import load_taxonomy, build_taxonomy_prompt_section
+            nt = load_taxonomy("narrative_categories")
+            rt = load_taxonomy("risk_tags")
+            taxonomy_section = build_taxonomy_prompt_section(nt, rt)
+            ANALYST_SYSTEM_PROMPT += "\n\n---\n\n" + taxonomy_section
+        except Exception:
+            pass
     return ANALYST_SYSTEM_PROMPT
 
 
