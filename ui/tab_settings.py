@@ -102,7 +102,27 @@ def render_tab_settings():
         placeholder="设置知识库访问密码（留空则不启用密码保护）",
     )
 
-    # ── Section 3: Feishu Notification ────────────────────────────
+    # ── Section 3: WeChat Official Account ──────────────────────────
+    st.divider()
+    st.markdown("**💬 微信公众号配置**")
+    st.caption("配置公众号后台 Cookie 以启用微信公众号文章搜索。前往 mp.weixin.qq.com 登录后从浏览器开发者工具获取。")
+
+    wechat_cfg = engine_cfg.get("wechat", {})
+    wechat_cookie = st.text_area(
+        "公众号后台 Cookie",
+        value=wechat_cfg.get("cookie", ""),
+        key="settings_wechat_cookie",
+        placeholder="从 mp.weixin.qq.com 浏览器开发者工具 → Network → 任意请求 → Request Headers → Cookie 复制",
+        height=80,
+    )
+    wechat_token = st.text_input(
+        "AppMsg Token",
+        value=wechat_cfg.get("appmsg_token", ""),
+        key="settings_wechat_token",
+        placeholder="从微信文章页 URL 参数或抓包工具获取",
+    )
+
+    # ── Section 4: Feishu Notification ────────────────────────────
     st.divider()
     st.markdown("**📣 飞书通知**")
 
@@ -158,7 +178,15 @@ def render_tab_settings():
             "max_tokens": max_tokens,
             "temperature": temperature,
             "kb_password": kb_password,
+            "wechat": {
+                "cookie": wechat_cookie.strip(),
+                "appmsg_token": wechat_token.strip(),
+            },
         }
+        # Preserve unmanaged keys from existing config
+        for k, v in engine_cfg.items():
+            if k not in new_engine:
+                new_engine[k] = v
         _save_engine_config(new_engine)
 
         new_notif = {

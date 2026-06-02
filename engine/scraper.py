@@ -1,6 +1,7 @@
 """舆情内容抓取器 —— 多平台内容 + 评论区抓取。
 
-支持平台: YouTube (yt-dlp), 小红书 (xhshow API), X/Twitter, Reddit, 通用网页
+支持平台: YouTube (yt-dlp), 小红书 (xhshow API), 抖音, B站 (bilibili-api),
+         微博 (crawl4weibo), 微信公众号 (wechatarticles), X/Twitter, Reddit, 通用网页
 
 用法:
     from scraper import scrape
@@ -8,9 +9,11 @@
     result = scrape("https://www.xiaohongshu.com/explore/xxx")
 """
 
+import io
 import json
 import re
 import sys
+import time
 import hashlib
 from concurrent import futures
 from datetime import datetime, date
@@ -19,10 +22,10 @@ from urllib.parse import urlparse
 
 # Hard timeout for yt-dlp extract_info calls (seconds).
 _SCRAPE_TIMEOUT = 90
+_DEFAULT_RETRIES = 2
+_DEFAULT_RETRY_BASE_DELAY = 2.0
 
-# Windows terminal UTF-8 adaptation
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+import engine._compat
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
@@ -37,6 +40,9 @@ PLATFORM_ABBREV = {
     "Instagram": "ig",
     "TikTok": "tt",
     "抖音": "dy",
+    "B站": "bl",
+    "微博": "wb",
+    "微信公众号": "wc",
     "通用网页": "web",
     "新闻媒体": "news",
     "论坛": "forum",
@@ -50,8 +56,26 @@ def _extract_content_id(url: str, platform: str) -> str:
     path = parsed.path.rstrip("/")
     path_parts = path.split("/")
 
-    if platform in ("小红书", "抖音"):
+    if platform in ("小红书", "抖音", "微博"):
         return path_parts[-1] if path_parts else hashlib.md5(url.encode()).hexdigest()[:8]
+
+    if platform == "B站":
+        # Extract BV/AV number from bilibili URL
+        import re
+        m = re.search(r'/(BV[a-zA-Z0-9]{10}|av\d+)', url)
+        if m:
+            return m.group(1)
+        return path_parts[-1] if path_parts else hashlib.md5(url.encode()).hexdigest()[:8]
+
+    if platform == "微信公众号":
+        # Extract __biz + sn from query params
+        from urllib.parse import parse_qs
+        qs = parse_qs(parsed.query)
+        biz = qs.get("__biz", [""])[0][:16] if qs.get("__biz") else ""
+        sn = qs.get("sn", [""])[0][:8] if qs.get("sn") else ""
+        if biz:
+            return biz[-8:] + (sn or "")
+        return hashlib.md5(url.encode()).hexdigest()[:8]
 
     if platform == "YouTube":
         from urllib.parse import parse_qs
@@ -90,6 +114,29 @@ def _write_raw_cases(data: dict, url: str, platform: str) -> str | None:
         return None
 
 
+def _get_config() -> dict:
+    """Load engine/config.json. Returns empty dict on failure."""
+    config_path = ENGINE_DIR / "config.json"
+    if config_path.exists():
+        try:
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _with_retry(fn, *args, max_retries=None, base_delay=None, _url="", _platform="", _stage=""):
+    """Execute fn(*args) with exponential backoff retry. Delegates to engine.retry."""
+    from engine.retry import retry_call, RetryConfig
+    if max_retries is None:
+        max_retries = _DEFAULT_RETRIES
+    if base_delay is None:
+        base_delay = _DEFAULT_RETRY_BASE_DELAY
+    return retry_call(fn, *args,
+                      config=RetryConfig(max_retries=max_retries, base_delay=base_delay),
+                      _url=_url, _platform=_platform, _stage=_stage)
+
+
 def _detect_platform(url: str) -> str:
     """Auto-detect platform from URL."""
     domain = urlparse(url).netloc.lower()
@@ -107,6 +154,16 @@ def _detect_platform(url: str) -> str:
         return "TikTok"
     if "douyin.com" in domain:
         return "抖音"
+    if "bilibili.com" in domain:
+        return "B站"
+    if "weibo.com" in domain:
+        return "微博"
+    if "mp.weixin.qq.com" in domain or "weixin.sogou.com" in domain:
+        return "微信公众号"
+    if "instagram.com" in domain:
+        return "Instagram"
+    if "tiktok.com" in domain:
+        return "TikTok"
     return "通用网页"
 
 
@@ -128,6 +185,10 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
         "评论列表": [],
     }
 
+    cfg = _get_config()
+    youtube_cfg = cfg.get("youtube", {})
+    _scrape_timeout = youtube_cfg.get("scrape_timeout", _SCRAPE_TIMEOUT)
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -137,20 +198,40 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
         "socket_timeout": 60,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        executor = futures.ThreadPoolExecutor(max_workers=1)
-        try:
-            fut = executor.submit(ydl.extract_info, url, False)
+    # Cookie support for age-restricted / member-only videos
+    cookie_file = youtube_cfg.get("cookie_file", "")
+    if cookie_file and Path(cookie_file).exists():
+        ydl_opts["cookiefile"] = cookie_file
+
+    info = {}  # Initialize before with-block to prevent NameError on early failure
+
+    def _extract():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            executor = futures.ThreadPoolExecutor(max_workers=1)
             try:
-                info = fut.result(timeout=_SCRAPE_TIMEOUT)
-            except futures.TimeoutError:
-                result["原文内容"] = "[抓取超时: yt-dlp 在 90s 内未返回]"
-                return result
-            except Exception as exc:
-                result["原文内容"] = f"[抓取失败: {exc}]"
-                return result
-        finally:
-            executor.shutdown(wait=False)
+                fut = executor.submit(ydl.extract_info, url, False)
+                try:
+                    return fut.result(timeout=_scrape_timeout)
+                except futures.TimeoutError:
+                    result["原文内容"] = f"[抓取超时: yt-dlp 在 {_scrape_timeout}s 内未返回]"
+                    return None
+                except Exception as exc:
+                    result["原文内容"] = f"[抓取失败: {exc}]"
+                    return None
+            finally:
+                executor.shutdown(wait=False)
+
+    try:
+        info = _with_retry(
+            _extract, max_retries=2, base_delay=2.0,
+            _platform="YouTube", _stage="extract_info",
+        )
+    except Exception as exc:
+        result["原文内容"] = f"[抓取失败(已重试): {exc}]"
+        return result
+
+    if info is None:
+        return result  # Error message already set in _extract
 
     title = info.get("title", "")
     channel = info.get("channel", "")
@@ -214,18 +295,90 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _scrape_xhs(url: str, timeout: int = 30000) -> dict:
-    """Scrape XHS note detail + comments using xhshow API client."""
-    from engine.xhs_fetcher import fetch_xhs_note
-    return fetch_xhs_note(url)
+    """Scrape XHS note detail + comments.
+
+    Tiered strategy (lightest first):
+      1. XHS-Downloader (cookie-free metadata) → xhshow API
+      2. MediaCrawler adapter (API → guest HTML → auth HTML fallback)
+    """
+    from engine.xhs_fetcher import fetch_xhs_note as _fetch_via_xhshow
+
+    result = _fetch_via_xhshow(url)
+    if not result.get("_scrape_error"):
+        return result
+
+    # Tier 1 failed — try MediaCrawler adapter (adds HTML parsing fallback)
+    try:
+        from engine.mediacrawler_adapter import fetch_xhs_note as _fetch_via_mc
+        mc_result = _fetch_via_mc(url)
+        if not mc_result.get("_scrape_error"):
+            return mc_result
+    except ImportError:
+        pass
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Reddit: Playwright-based scraping
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
-    """Scrape Reddit post (using old.reddit.com)."""
-    from playwright.sync_api import sync_playwright
+def _scrape_reddit_json_api(url: str) -> dict:
+    """Scrape Reddit post via JSON API (no browser, more reliable). Returns None on failure."""
+    import requests as _requests
+    json_url = url.rstrip("/") + ".json"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    try:
+        resp = _requests.get(json_url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        post_data = data[0]["data"]["children"][0]["data"]
+    except Exception:
+        return None
+
+    title = post_data.get("title", "")
+    body = post_data.get("selftext", "")
+    author = post_data.get("author", "")
+    score = post_data.get("score", 0)
+    comment_count = post_data.get("num_comments", 0)
+    created_utc = post_data.get("created_utc", 0)
+    from datetime import datetime
+    post_time = datetime.fromtimestamp(created_utc).isoformat() if created_utc else ""
+    permalink = post_data.get("permalink", "")
+
+    # Top-level comments
+    comments = []
+    try:
+        comment_data = data[1]["data"]["children"]
+        for c in comment_data[:10]:
+            cdata = c.get("data", {})
+            body_text = cdata.get("body", "")
+            c_score = cdata.get("score", 0)
+            if body_text.strip():
+                comments.append({"内容": body_text.strip()[:300], "点赞": str(c_score)})
+    except Exception:
+        pass
+
+    return {
+        "原文内容": f"标题：{title}\n\n正文：{body[:1000] if body else '(无正文)'}",
+        "来源平台": "Reddit",
+        "发布者类型": f"Reddit用户: {author}",
+        "互动数据": f"upvote {score}, {comment_count} 评论",
+        "发布时间": post_time,
+        "原文链接": url,
+        "评论列表": comments,
+        "社媒数据": {"作者": author, "国家": "", "点赞": score,
+                      "评论": comment_count, "粉丝": 0,
+                      "播放量": None, "作者主页": []},
+    }
+
+
+def _scrape_reddit_playwright(url: str, timeout: int = 30000) -> dict:
+    """Fallback: scrape Reddit post via old.reddit.com + Playwright."""
+    from engine.browser_pool import launch_context
 
     old_url = re.sub(r'(://)?(www\.)?reddit\.com', r'\1old.reddit.com', url)
 
@@ -239,11 +392,12 @@ def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
         "评论列表": [],
     }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
+    ctx, browser, pw = launch_context(
+        headless=True, stealth=False,
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    )
+    try:
+        page = ctx.new_page()
         page.goto(old_url, timeout=timeout, wait_until="domcontentloaded")
         try:
             page.wait_for_selector("a.title", timeout=5000)
@@ -282,8 +436,9 @@ def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
                     result["评论列表"].append({"内容": text.strip()[:300], "点赞": cl})
             except Exception:
                 continue
-
+    finally:
         browser.close()
+        pw.stop()
 
     result["原文内容"] = f"标题：{title}\n\n正文：{body[:1000] if body else '(无正文)'}"
     result["发布者类型"] = f"Reddit用户: {author}"
@@ -294,6 +449,14 @@ def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
                           "播放量": None, "作者主页": []}
 
     return result
+
+
+def _scrape_reddit(url: str, timeout: int = 30000) -> dict:
+    """Scrape Reddit post: try JSON API first, fallback to Playwright."""
+    result = _scrape_reddit_json_api(url)
+    if result and result.get("原文内容") and "标题：" in result["原文内容"]:
+        return result
+    return _scrape_reddit_playwright(url, timeout)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -316,7 +479,7 @@ def _parse_int(s: str) -> int:
 
 def _scrape_x(url: str, timeout: int = 30000) -> dict:
     """Scrape X/Twitter post."""
-    from playwright.sync_api import sync_playwright
+    from engine.browser_pool import launch_context
 
     result = {
         "原文内容": "",
@@ -328,11 +491,26 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
         "评论列表": [],
     }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
+    cfg = _get_config()
+    x_cfg = cfg.get("x", {})
+
+    ctx, browser, pw = launch_context(
+        headless=True, stealth=False,
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    )
+    try:
+        # Inject auth_token cookie if configured
+        auth_token = x_cfg.get("auth_token", "")
+        if auth_token:
+            try:
+                ctx.add_cookies([{
+                    "name": "auth_token", "value": auth_token,
+                    "domain": ".x.com", "path": "/",
+                }])
+            except Exception:
+                pass
+
+        page = ctx.new_page()
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
         try:
             page.wait_for_selector("article[data-testid='tweet']", timeout=8000)
@@ -354,7 +532,9 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
         like_el = page.query_selector("button[data-testid='like'] span")
         likes = like_el.inner_text() if like_el else "0"
 
-        view_el = page.query_selector("span[data-testid='app-text-transition-container']")
+        view_el = page.query_selector("a[href$='/analytics'] span")
+        if not view_el:
+            view_el = page.query_selector("span[data-testid='app-text-transition-container']")
         views = view_el.inner_text() if view_el else ""
 
         time_el = page.query_selector("time")
@@ -369,8 +549,9 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
                     result["评论列表"].append({"内容": text.strip()[:300], "点赞": "0"})
             except Exception:
                 continue
-
+    finally:
         browser.close()
+        pw.stop()
 
     result["原文内容"] = tweet_text[:1000]
     result["发布者类型"] = f"X用户: {author}"
@@ -389,7 +570,7 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
 
 def _scrape_generic(url: str, timeout: int = 30000) -> dict:
     """Generic web page scraper."""
-    from playwright.sync_api import sync_playwright
+    from engine.browser_pool import launch_context
 
     result = {
         "原文内容": "",
@@ -401,11 +582,12 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
         "评论列表": [],
     }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
+    ctx, browser, pw = launch_context(
+        headless=True, stealth=False,
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    )
+    try:
+        page = ctx.new_page()
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
         try:
             page.wait_for_selector("article, main, div.post-content, div.content", timeout=5000)
@@ -414,14 +596,28 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
 
         title = page.title() or ""
         body = ""
-        for selector in ["article", "main", "div.post-content", "div.content", "body"]:
+        _selectors = [
+            "article", "main", "div.post-content", "div.content",
+            "div.article-content", "div.entry-content", "div#content",
+            "div.content-wrapper", "body",
+        ]
+        for selector in _selectors:
             el = page.query_selector(selector)
             if el:
                 body = el.inner_text()
                 if len(body) > 100:
                     break
 
+        # Fallback: meta description
+        if not body or len(body) < 50:
+            meta_el = page.query_selector("meta[name='description'], meta[property='og:description']")
+            if meta_el:
+                meta_content = meta_el.get_attribute("content")
+                if meta_content:
+                    body = meta_content
+    finally:
         browser.close()
+        pw.stop()
 
     result["原文内容"] = f"标题：{title}\n\n正文：{body[:1500] if body else '(无法提取正文)'}"
     result["社媒数据"] = {"作者": "", "国家": "", "点赞": 0, "评论": 0,
@@ -438,9 +634,308 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _scrape_douyin(url: str, timeout: int = 30000) -> dict:
-    """Scrape douyin video via TikTokDownloader."""
+    """Scrape douyin video via TikTokDownloader, with MediaCrawler fallback."""
     from engine.tt_fetcher import fetch_douyin_video
-    return fetch_douyin_video(url)
+    result = fetch_douyin_video(url)
+    if not result.get("_scrape_error"):
+        return result
+    # Fallback: try MediaCrawler DouYinClient
+    try:
+        from engine.douyin_adapter import fetch_douyin_note
+        mc_result = fetch_douyin_note(url)
+        if not mc_result.get("_scrape_error"):
+            return mc_result
+    except ImportError:
+        pass
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B站 (Bilibili): bilibili-api-python — async API, wrapped in sync helper
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _scrape_bilibili(url: str, timeout: int = 30000) -> dict:
+    """Scrape B站 video via bilibili-api-python."""
+    import asyncio as _asyncio
+    vid = _extract_content_id(url, "B站")
+
+    cfg = _get_config()
+    bl_cfg = cfg.get("bilibili", {})
+
+    async def _fetch():
+        from bilibili_api import video, Credential
+        credential = Credential(
+            sessdata=bl_cfg.get("sessdata", ""),
+            bili_jct=bl_cfg.get("bili_jct", ""),
+            buvid3=bl_cfg.get("buvid3", ""),
+            dedeuserid=bl_cfg.get("dedeuserid", ""),
+        )
+        v = video.Video(bvid=vid if vid.startswith("BV") else None,
+                        aid=int(vid[2:]) if vid.startswith("av") else None,
+                        credential=credential)
+        info = await v.get_info()
+        stat = info.get("stat", {})
+        owner = info.get("owner", {})
+
+        # Get comments (top 10)
+        comments = []
+        try:
+            from bilibili_api import comment
+            c_data = await comment.get_comments(v.get_aid(), comment.CommentResourceType.VIDEO, page_index=1)
+            for c in c_data.get("replies", [])[:10]:
+                comments.append(c.get("content", {}).get("message", "") or "")
+        except Exception as e:
+            print(f"[B站] Comment fetch failed: {e}", file=sys.stderr)
+
+        return info, stat, owner, comments
+
+    try:
+        info, stat, owner, comments = _asyncio.run(_fetch())
+    except Exception as e:
+        return {
+            "原文内容": f"(B站抓取失败: {e})",
+            "发布时间": "",
+            "来源平台": "B站",
+            "发布者类型": "未知",
+            "互动数据": "",
+            "原文链接": url,
+            "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+            "评论列表": [],
+        }
+
+    desc = info.get("desc", "")
+    title = info.get("title", "")
+    content = f"标题：{title}\n\n{desc}"
+    pub_ts = info.get("pubdate", 0)
+    publish_time = datetime.fromtimestamp(pub_ts).strftime("%Y-%m-%d") if pub_ts else ""
+
+    author_name = owner.get("name", "")
+    author_mid = owner.get("mid", "")
+    homepage = f"https://space.bilibili.com/{author_mid}" if author_mid else ""
+
+    return {
+        "原文内容": content[:3000],
+        "发布时间": publish_time,
+        "来源平台": "B站",
+        "发布者类型": f"B站UP主: {author_name}" if author_name else "未知",
+        "互动数据": "",
+        "原文链接": url,
+        "社媒数据": {
+            "作者": author_name,
+            "国家": "CN",
+            "点赞": stat.get("like", 0) or 0,
+            "评论": stat.get("reply", 0) or 0,
+            "粉丝": 0,
+            "播放量": stat.get("view", 0) or 0,
+            "作者主页": [homepage] if homepage else [],
+        },
+        "评论列表": comments[:10],
+    }
+
+
+
+
+def _scrape_weibo(url: str, timeout: int = 30000) -> dict:
+    """Scrape 微博 post via crawl4weibo."""
+    bid = _extract_content_id(url, "微博")
+    try:
+        from crawl4weibo import WeiboClient
+        client = WeiboClient()
+        post = client.get_post_by_bid(bid)
+
+        author_name = ""
+        followers_str = "0"
+        homepage = ""
+        try:
+            user = client.get_user_by_uid(post.user_id)
+            author_name = user.screen_name or ""
+            followers_str = str(user.followers_count) if user.followers_count else "0"
+            homepage = f"https://weibo.com/u/{post.user_id}" if post.user_id else ""
+        except Exception as e:
+            print(f"[微博] User info fetch failed: {e}", file=sys.stderr)
+
+        comments_list = []
+        try:
+            comments, _ = client.get_comments(post.id, page=1)
+            for c in comments[:10]:
+                if c.text:
+                    comments_list.append(c.text.strip())
+        except Exception as e:
+            print(f"[微博] Comment fetch failed: {e}", file=sys.stderr)
+
+        pub_ts = str(post.created_at) if post.created_at else ""
+        if pub_ts and "+" in pub_ts:
+            pub_ts = pub_ts.split("+")[0].strip()
+
+        return {
+            "原文内容": post.text[:3000] if post.text else "",
+            "发布时间": pub_ts,
+            "来源平台": "微博",
+            "发布者类型": f"微博用户: {author_name}" if author_name else "未知",
+            "互动数据": "",
+            "原文链接": url,
+            "社媒数据": {
+                "作者": author_name,
+                "国家": "CN",
+                "点赞": post.attitudes_count or 0,
+                "评论": post.comments_count or 0,
+                "粉丝": followers_str,
+                "播放量": None,
+                "作者主页": [homepage] if homepage else [],
+            },
+            "评论列表": comments_list[:10],
+        }
+    except Exception as e:
+        return {
+            "原文内容": f"(微博抓取失败: {e})",
+            "发布时间": "",
+            "来源平台": "微博",
+            "发布者类型": "未知",
+            "互动数据": "",
+            "原文链接": url,
+            "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+            "评论列表": [],
+        }
+
+
+def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
+    """Scrape 微信公众号 article — public page parsing via requests + BeautifulSoup."""
+    import requests as _requests
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+    }
+    try:
+        resp = _requests.get(url, headers=headers, timeout=min(timeout / 1000, 30))
+        if resp.status_code != 200:
+            return {
+                "原文内容": f"(微信公众号抓取失败: HTTP {resp.status_code})",
+                "发布时间": "", "来源平台": "微信公众号", "发布者类型": "未知",
+                "互动数据": "", "原文链接": url,
+                "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+                "评论列表": [],
+            }
+        html = resp.text
+    except Exception as e:
+        return {
+            "原文内容": f"(微信公众号抓取失败: {e})",
+            "发布时间": "", "来源平台": "微信公众号", "发布者类型": "未知",
+            "互动数据": "", "原文链接": url,
+            "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+            "评论列表": [],
+        }
+
+    from bs4 import BeautifulSoup as _bs
+    soup = _bs(html, "lxml")
+
+    # Title: og:title meta or h2#activity-name
+    title = ""
+    og_title = soup.find("meta", property="og:title")
+    if og_title:
+        title = og_title.get("content", "")
+    if not title:
+        h2_title = soup.find("h2", id="activity-name")
+        if h2_title:
+            title = h2_title.get_text(strip=True)
+    if not title:
+        title_tag = soup.find("title")
+        if title_tag:
+            title = title_tag.get_text(strip=True)
+
+    # Author (公众号名称): og:article:author meta or span#js_name
+    author = ""
+    og_author = soup.find("meta", property="og:article:author")
+    if og_author:
+        author = og_author.get("content", "")
+    if not author:
+        js_name = soup.find(id="js_name")
+        if js_name:
+            author = js_name.get_text(strip=True)
+
+    # Publish time
+    publish_time = ""
+    og_time = soup.find("meta", property="og:article:published_time")
+    if og_time:
+        publish_time = og_time.get("content", "")[:19]
+    if not publish_time:
+        pub_em = soup.find("em", id="publish_time")
+        if pub_em:
+            publish_time = pub_em.get_text(strip=True)
+    # Try to parse timestamp from page scripts
+    if not publish_time:
+        import re
+        ts_match = re.search(r'var\s+ct\s*=\s*["\'](\d{10,13})["\']', html)
+        if ts_match:
+            try:
+                ts = int(ts_match.group(1))
+                if ts > 1e12:
+                    ts = ts / 1000.0
+                from datetime import datetime
+                publish_time = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
+    # Content: div#js_content.rich_media_content
+    content = ""
+    js_content = soup.find("div", id="js_content")
+    if js_content:
+        # Remove hidden elements
+        for hidden in js_content.select(".rich_media_area_extra, script, style"):
+            hidden.decompose()
+        content = js_content.get_text(separator="\n", strip=True)
+
+    if not content:
+        # Try alternative: rich_media_content class
+        rm_content = soup.find("div", class_="rich_media_content")
+        if rm_content:
+            content = rm_content.get_text(separator="\n", strip=True)
+
+    return {
+        "原文内容": content[:3000] if content else f"标题：{title}",
+        "发布时间": publish_time,
+        "来源平台": "微信公众号",
+        "发布者类型": f"公众号: {author}" if author else "未知",
+        "互动数据": "",
+        "原文链接": url,
+        "社媒数据": {
+            "作者": author,
+            "国家": "CN",
+            "点赞": 0,
+            "评论": 0,
+            "粉丝": 0,
+            "播放量": None,
+            "作者主页": [],
+        },
+        "评论列表": [],
+    }
+
+
+def _scrape_instagram(url: str, timeout: int = 30000) -> dict:
+    """Instagram: not supported due to aggressive anti-scraping. Returns clear error."""
+    return {
+        "原文内容": "(Instagram 暂不支持自动抓取，请手动粘贴帖子内容或截图)",
+        "来源平台": "Instagram",
+        "发布者类型": "未知",
+        "互动数据": "",
+        "发布时间": "",
+        "原文链接": url,
+        "评论列表": [],
+        "社媒数据": {"作者": "", "国家": "", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+    }
+
+
+def _scrape_tiktok(url: str, timeout: int = 30000) -> dict:
+    """TikTok: requires mobile API tokens not available in pipeline. Returns clear error."""
+    return {
+        "原文内容": "(TikTok 暂不支持自动抓取，请手动粘贴帖子内容或截图)",
+        "来源平台": "TikTok",
+        "发布者类型": "未知",
+        "互动数据": "",
+        "发布时间": "",
+        "原文链接": url,
+        "评论列表": [],
+        "社媒数据": {"作者": "", "国家": "", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+    }
 
 
 SCRAPERS = {
@@ -449,6 +944,11 @@ SCRAPERS = {
     "Reddit": _scrape_reddit,
     "X": _scrape_x,
     "抖音": _scrape_douyin,
+    "B站": _scrape_bilibili,
+    "微博": _scrape_weibo,
+    "微信公众号": _scrape_wechat,
+    "Instagram": _scrape_instagram,
+    "TikTok": _scrape_tiktok,
 }
 
 

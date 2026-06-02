@@ -3,8 +3,20 @@ __pycache__/
 *.pyc
 
 # Secrets / credentials
+.env
 engine/config.json
 engine/.xhs_cookies.json
+engine/.xhs_cookies_headless.json
+engine/.tt_cookies.json
+config/auth_config.json
+config/remembered_user.json
+
+# Knowledge base (user-generated content)
+wiki/cases/
+wiki/authors/
+wiki/reports/
+wiki/syntheses/
+wiki/log.md
 
 # Outputs (generated at runtime)
 outputs/
@@ -19,3 +31,12 @@ raw/
 # OS
 .DS_Store
 Thumbs.db
+
+# MCP / local config
+.mcp.json
+
+# Cache / temp
+engine/.xhs_dl_cache/
+*.tmp.*
+*.png
+*.jpg

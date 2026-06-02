@@ -77,6 +77,12 @@ def _render_kb_nav(pages: list[dict]) -> str | None:
                     pf = "抖音"
                 elif "youtube" in fp:
                     pf = "YTB"
+                elif "bilibili" in fp:
+                    pf = "B站"
+                elif "weibo" in fp:
+                    pf = "微博"
+                elif "wechat" in fp:
+                    pf = "公众号"
                 else:
                     # Legacy flat layout — try to guess from title
                     t = p.get("title", "").lower()
@@ -86,10 +92,14 @@ def _render_kb_nav(pages: list[dict]) -> str | None:
                         pf = "抖音"
                     elif "youtube" in t or "ytb" in t:
                         pf = "YTB"
+                    elif "bilibili" in t or "b站" in t:
+                        pf = "B站"
+                    elif "微博" in t or "weibo" in t:
+                        pf = "微博"
                 platforms.setdefault(pf, []).append(p)
 
             with st.expander(f"📋 Cases ({len(case_pages)})", expanded=True):
-                for pf_name in ["小红书", "抖音", "YTB", "其他"]:
+                for pf_name in ["小红书", "抖音", "YTB", "B站", "微博", "公众号", "其他"]:
                     pf_cases = platforms.get(pf_name, [])
                     if not pf_cases:
                         continue
@@ -116,6 +126,68 @@ def _render_kb_nav(pages: list[dict]) -> str | None:
     return selected
 
 
+def _get_report_html_path(selected: str) -> str:
+    """Find or generate the HTML report file for a given report path.
+
+    Returns path to .html file, or empty string if unavailable.
+    """
+    from pathlib import Path as _Path
+
+    parts = selected.split("/")
+    if len(parts) < 3:
+        return ""
+    report_type = parts[1]
+    filename = parts[2]
+    date_str = filename.replace(".md", "")
+
+    # Check if HTML already exists on disk
+    reports_dir = _Path(__file__).resolve().parent.parent / "wiki" / "reports"
+    html_path = reports_dir / report_type / f"{date_str}.html"
+    if html_path.exists():
+        return str(html_path)
+
+    # Generate on the fly
+    try:
+        from agents.daily_report import (
+            _collect_report_data, generate_daily_html, generate_monthly_html,
+        )
+        if report_type == "monthly":
+            data = _collect_report_data(month_str=date_str)
+            return generate_monthly_html(data)
+        else:
+            data = _collect_report_data(date_str=date_str)
+            return generate_daily_html(data)
+    except Exception:
+        return ""
+
+
+def _render_report_download(selected: str):
+    """Render HTML report download button for daily/monthly reports."""
+    html_path = _get_report_html_path(selected)
+    if not html_path:
+        return
+
+    from pathlib import Path as _Path
+    try:
+        html_bytes = _Path(html_path).read_bytes()
+        parts = selected.split("/")
+        filename = parts[2]
+        date_str = filename.replace(".md", "")
+        report_type = parts[1]
+        download_name = f"舆情监测{'月报' if report_type == 'monthly' else '日报'}_{date_str}.html"
+
+        st.download_button(
+            label=f"📥 下载 HTML 报告 ({len(html_bytes)/1024/1024:.1f} MB)",
+            data=html_bytes,
+            file_name=download_name,
+            mime="text/html",
+            key=f"kb_dl_{selected}",
+            use_container_width=True,
+        )
+    except Exception:
+        pass  # silent — download is optional enhancement
+
+
 def _render_page_detail(selected: str | None, pages: list[dict]):
     """Render the selected knowledge base page content."""
     if not selected:
@@ -128,7 +200,28 @@ def _render_page_detail(selected: str | None, pages: list[dict]):
         # Report pages have pre-loaded content
         content = st.session_state.get("_selected_page_content", "")
         if content:
-            st.markdown(content)
+            # ── HTML download button ──
+            _render_report_download(selected)
+
+            # ── Preview mode toggle ──
+            preview_mode = st.radio(
+                "预览模式", ["Markdown", "HTML 预览"],
+                horizontal=True,
+                key=f"kb_preview_{selected}",
+            )
+
+            if preview_mode == "HTML 预览":
+                html_path = _get_report_html_path(selected)
+                if html_path:
+                    from pathlib import Path
+                    html_content = Path(html_path).read_text(encoding="utf-8")
+                    st.caption(f"内嵌预览 · 文件大小: {len(html_content)/1024/1024:.1f} MB")
+                    st.components.v1.html(html_content, height=2400, scrolling=True)
+                else:
+                    st.warning("HTML 报告不可用，请先通过侧边栏生成今日报告。")
+            else:
+                st.divider()
+                st.markdown(content)
         else:
             st.info("报告内容不可用")
         return

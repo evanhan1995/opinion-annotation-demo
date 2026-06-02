@@ -101,8 +101,34 @@ def check_relevance(content: str, keyword: str, platform: str) -> tuple[bool, st
 
 # ── Main annotation ────────────────────────────────────────────────────
 def annotate(raw: RawData, keyword_context: str = "",
-             similar_cases: list[dict] | None = None) -> Annotation:
-    """Annotate raw content into structured assessment via DeepSeek."""
+             similar_cases: list[dict] | None = None,
+             use_llm: bool = True,
+             sentinel_result=None) -> Annotation:
+    """Annotate raw content into structured assessment via DeepSeek.
+
+    Args:
+        use_llm: If False, build Annotation from sentinel_result.suggested_*
+                 fields without calling LLM (pre-filter fast_track path).
+        sentinel_result: SentinelResult from pre-filter (required if use_llm=False).
+    """
+    # Pre-filter fast_track: skip LLM, use sentinel suggestions
+    if not use_llm:
+        if sentinel_result is None:
+            raise ValueError("sentinel_result is required when use_llm=False")
+        return Annotation(
+            url=raw.url,
+            platform=raw.platform,
+            severity=sentinel_result.suggested_severity or "P3",
+            severity_reason=f"[Sentinel pre-filter] {sentinel_result.reason}",
+            sentiment=sentinel_result.suggested_sentiment or "中性",
+            risk_tags=["预标注"] if sentinel_result.suggested_sentiment != "中性" else [],
+            triage="内部研判" if sentinel_result.suggested_severity in ("P2", "P3") else "上升PR",
+            comment_risk="绿",
+            summary=f"[快速通道] {raw.title[:80]}" if raw.title else f"[快速通道] {raw.content[:80]}",
+            relevance="relevant",
+            relevance_reason=f"Sentinel fast_track: {sentinel_result.rule_hits}",
+        )
+
     from engine.annotate import build_system_prompt, format_user_message, annotate_one, load_config
 
     engine_input = rawdata_to_engine_dict(raw)

@@ -109,6 +109,9 @@ for key, default in [
     ("_result_source", ""),
     ("monitor_harvest", None),
     ("p0p1_alerts", []),
+    ("entry_queue", []),
+    ("batch_auto_process", False),
+    ("batch_items", []),
     ("pipeline_init", False),
 ]:
     if key not in st.session_state:

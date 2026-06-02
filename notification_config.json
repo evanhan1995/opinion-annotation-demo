@@ -1,17 +1,4 @@
 {
   "desktop_alert": true,
-  "webhooks": [
-    {
-      "name": "飞书舆情告警群",
-      "url": "",
-      "enabled": true,
-      "trigger_level": "P0"
-    },
-    {
-      "name": "企业微信PR群",
-      "url": "",
-      "enabled": false,
-      "trigger_level": "P0+P1"
-    }
-  ]
+  "webhooks": []
 }

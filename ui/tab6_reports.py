@@ -41,14 +41,21 @@ def _render_daily_reports():
         content = (REPORTS_DAILY / f"{selected}.md").read_text(encoding="utf-8")
         st.markdown(content)
 
+    # Show post-rerun message (st.success is cleared by st.rerun)
+    _gen_daily_msg = st.session_state.pop("_gen_daily_msg", "")
+    if _gen_daily_msg:
+        if "失败" in _gen_daily_msg:
+            st.error(_gen_daily_msg)
+        else:
+            st.success(f"日报已保存: {_gen_daily_msg}")
+
     col_a, col_b = st.columns(2)
     with col_a:
         if st.button("🔄 生成今日日报", key="gen_daily_btn", use_container_width=True):
             with st.spinner("生成日报中..."):
                 from agents.orchestrator import run_daily_report
-                path = run_daily_report()
-                st.success(f"日报已保存: {path}")
-                st.rerun()
+                st.session_state._gen_daily_msg = run_daily_report()
+            st.rerun()
 
 
 def _render_monthly_reports():
@@ -68,9 +75,16 @@ def _render_monthly_reports():
         content = (REPORTS_MONTHLY / f"{selected}.md").read_text(encoding="utf-8")
         st.markdown(content)
 
+    # Show post-rerun message
+    _gen_monthly_msg = st.session_state.pop("_gen_monthly_msg", "")
+    if _gen_monthly_msg:
+        if "失败" in _gen_monthly_msg:
+            st.error(_gen_monthly_msg)
+        else:
+            st.success(f"月报已保存: {_gen_monthly_msg}")
+
     if st.button("🔄 生成本月月报", key="gen_monthly_btn", use_container_width=True):
         with st.spinner("生成月报中..."):
             from agents.orchestrator import run_monthly_report
-            path = run_monthly_report()
-            st.success(f"月报已保存: {path}")
-            st.rerun()
+            st.session_state._gen_monthly_msg = run_monthly_report()
+        st.rerun()

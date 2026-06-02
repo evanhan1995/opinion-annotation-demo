@@ -303,3 +303,47 @@ def render_sidebar(_patrol_pending: bool):
                         st.success("登录成功！")
                     else:
                         st.error("登录失败")
+
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.caption("抖音登录状态")
+            try:
+                tt_cookie_file = ENGINE_DIR / ".tt_cookies.json"
+                tt_valid = False
+                if tt_cookie_file.exists():
+                    with open(tt_cookie_file, "r", encoding="utf-8") as _f:
+                        tt_data = _json.load(_f)
+                    saved_ts = tt_data.get("saved_at", 0)
+                    if saved_ts:
+                        saved_dt = _dt.fromtimestamp(saved_ts)
+                        days_left = 7 - (_dt.now() - saved_dt).days
+                        if days_left <= 0:
+                            st.error("Cookie 已过期")
+                        elif days_left <= 1:
+                            st.warning(f"Cookie 即将过期 ({days_left}天)")
+                        else:
+                            tt_valid = True
+                            st.caption(f"Cookie 有效 (剩余 {days_left} 天)")
+                # Also check TikTokDownloader settings.json
+                if not tt_valid:
+                    try:
+                        from engine.tt_fetcher import _check_cookie_valid
+                        if _check_cookie_valid():
+                            st.caption("Cookie 有效 (TikTokDownloader)")
+                            tt_valid = True
+                    except Exception:
+                        pass
+                if not tt_valid and not tt_cookie_file.exists():
+                    st.caption("未登录")
+            except Exception:
+                st.caption("未登录")
+            if st.button("刷新抖音登录", use_container_width=True, key="sidebar_dy_login"):
+                from engine.tt_fetcher import bootstrap_douyin_cookies
+                with st.spinner("正在打开浏览器..."):
+                    if bootstrap_douyin_cookies(force=True):
+                        st.success("登录成功！")
+                    else:
+                        st.error("登录失败")
+
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.caption("微信公众号 (搜狗微信搜索)")
+            st.caption("公开搜索，无需登录")

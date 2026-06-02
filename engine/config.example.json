@@ -5,5 +5,30 @@
   "api_base": "https://api.deepseek.com",
   "max_tokens": 4096,
   "temperature": 0.1,
-  "kb_password": ""
+  "kb_password": "",
+  "paths": {
+    "xhs_downloader": "D:/Claude code/Github skills/XHS-Downloader",
+    "tiktok_downloader": "D:/Claude code/Github skills/TikTokDownloader",
+    "media_crawler_profile": "D:/Claude code/MediaCrawler/browser_data/xhs_user_data_dir"
+  },
+  "youtube": {
+    "cookie_file": "",
+    "scrape_timeout": 90
+  },
+  "bilibili": {
+    "sessdata": "",
+    "bili_jct": "",
+    "buvid3": "",
+    "dedeuserid": ""
+  },
+  "douyin": {
+    "cookie": ""
+  },
+  "x": {
+    "auth_token": ""
+  },
+  "wechat": {
+    "cookie": "",
+    "appmsg_token": ""
+  }
 }

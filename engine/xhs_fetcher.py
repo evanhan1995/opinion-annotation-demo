@@ -11,6 +11,7 @@ Architecture:
   - Subsequent calls use cached cookies + httpx API calls
 """
 
+import io
 import json
 import os
 import re
@@ -20,20 +21,27 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse, quote
 
-# Windows UTF-8 adaptation
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+import engine._compat
 
 import httpx
 
 # xhshow is installed via pip (MediaCrawler dependency)
 from xhshow import Xhshow
 
+from engine.ratelimit import get_limiter
+
+from engine.browser_pool import launch_context, BROWSER_ARGS, STEALTH_JS
+
 ENGINE_DIR = Path(__file__).resolve().parent
 COOKIE_FILE = ENGINE_DIR / ".xhs_cookies.json"
+COOKIE_TTL_SEC = 7 * 24 * 3600  # 7 days
+COOKIE_PROACTIVE_REFRESH_SEC = 3600  # refresh 1h before expiry
 
 API_HOST = "https://edith.xiaohongshu.com"
 WEB_HOST = "https://www.xiaohongshu.com"
+
+# Known public note ID for cookie validation (lightweight API probe)
+_COOKIE_VALIDATION_NOTE_ID = "68c0efe4000000001d01cf79"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -60,13 +68,12 @@ def parse_note_url(url: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _load_cached_cookies() -> Optional[str]:
-    """Load cookie string from cache file."""
+    """Load cookie string from cache file if not expired."""
     if COOKIE_FILE.exists():
         try:
             data = json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
             ts = data.get("saved_at", 0)
-            # Cache valid for 7 days
-            if time.time() - ts < 7 * 24 * 3600:
+            if time.time() - ts < COOKIE_TTL_SEC:
                 return data.get("cookie_str", "")
         except (json.JSONDecodeError, KeyError):
             pass
@@ -81,76 +88,272 @@ def _save_cookies(cookie_str: str) -> None:
     )
 
 
+def _delete_cached_cookies() -> None:
+    """Delete the cached cookie file so a fresh login can start clean."""
+    if COOKIE_FILE.exists():
+        COOKIE_FILE.unlink()
+
+
+def _load_path_config(key: str, default: str = "") -> str:
+    """Load a path from engine/config.json paths section.
+
+    Resolution order: config.json → environment variable → default.
+    """
+    import os as _os
+    # 1. Try environment variable (uppercase, underscore)
+    env_key = key.upper()
+    env_val = _os.environ.get(env_key, "")
+    if env_val:
+        return env_val
+    # 2. Try config.json paths section
+    config_path = ENGINE_DIR / "config.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            paths = cfg.get("paths", {})
+            if key in paths and paths[key]:
+                return paths[key]
+        except (json.JSONDecodeError, OSError):
+            pass
+    return default
+
+
+def _load_wechat_config() -> dict:
+    """Load wechat config from engine/config.json."""
+    config_path = ENGINE_DIR / "config.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            return cfg.get("wechat", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _validate_cookie_search(cookie_str: str) -> bool:
+    """Validate cookie can access XHS search page (not just API).
+
+    XHS search page uses stricter auth — a cookie valid for the API
+    may still hit the login wall on search.  Returns True if search works.
+    """
+    from urllib.parse import quote
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False
+
+    playwright_cookies = []
+    for pair in cookie_str.split("; "):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            playwright_cookies.append({
+                "name": k.strip(), "value": v.strip(),
+                "domain": ".xiaohongshu.com", "path": "/",
+            })
+
+    test_url = f"https://www.xiaohongshu.com/search_result?keyword={quote('测试')}&sort=time_descending"
+    try:
+        ctx, browser, pw = launch_context(headless=True)
+        try:
+            ctx.add_cookies(playwright_cookies)
+            page = ctx.new_page()
+            page.goto(test_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            body_text = page.inner_text("body")[:3000]
+            blocked = any(kw in body_text for kw in ["登录后查看", "请先登录", "手机号登录"])
+            return not blocked
+        finally:
+            if browser:
+                browser.close()
+            else:
+                ctx.close()
+            pw.stop()
+    except Exception:
+        return False
+
+
+def _validate_cookie_actual(cookie_str: str) -> bool:
+    """Validate cookie by making a lightweight API call to a known note.
+
+    Returns True if the cookie can successfully authenticate an API request.
+    """
+    try:
+        client = XhsApiClient(cookie_str)
+        try:
+            note = client.get_note_detail(_COOKIE_VALIDATION_NOTE_ID, "")
+            # Any response (even empty/error that isn't auth-related) means cookie is valid
+            return True
+        except Exception as e:
+            if "XHS_COOKIE_EXPIRED" in str(e):
+                return False
+            # Non-auth errors (note deleted, rate limit, etc.) still mean cookie is valid
+            return "登录" not in str(e) and "login" not in str(e).lower()
+        finally:
+            client.close()
+    except Exception:
+        return False
+
+
+def _refresh_cookie_headless() -> Optional[str]:
+    """Attempt cookie refresh in headless mode.
+
+    Tries to reuse existing session via MediaCrawler profile or fresh headless browser.
+    Does NOT open a visible browser window — returns None if login is required.
+    """
+    media_crawler_profile = Path(_load_path_config(
+        "media_crawler_profile",
+        "D:/Claude code/MediaCrawler/browser_data/xhs_user_data_dir"
+    ))
+    user_data_dir = str(media_crawler_profile) if media_crawler_profile.exists() else None
+
+    ctx, browser, pw = launch_context(headless=True, user_data_dir=user_data_dir)
+    try:
+        page = ctx.new_page()
+        page.goto(WEB_HOST, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+
+        # Check if already logged in
+        try:
+            page.wait_for_selector(
+                "xpath=//a[contains(@href, '/user/profile/')]//span[text()='我']",
+                timeout=10000,
+            )
+            print("[XHS] Login detected via cached profile (headless).")
+        except Exception:
+            print("[XHS] Not logged in. Headless refresh not possible — manual login required.")
+            return None
+
+        cookies = ctx.cookies()
+        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+
+        if _validate_cookie_actual(cookie_str) and _validate_cookie_search(cookie_str):
+            _save_cookies(cookie_str)
+            return cookie_str
+        if cookie_str:
+            print("[XHS] Headless cookie failed search validation (may work for API but not search).")
+        return None
+    except Exception as e:
+        print(f"[XHS] Headless refresh failed: {e}")
+        return None
+    finally:
+        if browser:
+            browser.close()
+        else:
+            ctx.close()
+        pw.stop()
+
+
 def bootstrap_cookies(force: bool = False) -> Optional[str]:
     """Use Playwright to get XHS cookies from browser.
 
-    Tries cached cookies first. If expired/missing, opens a browser
-    (reusing MediaCrawler's cached profile if available) and extracts cookies.
+    Tries: cached cookies → headless refresh → visible browser (last resort).
 
     Returns:
         Cookie string on success, None on failure.
     """
+    # 1. Try cached cookies
     if not force:
         cached = _load_cached_cookies()
         if cached:
             return cached
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("[XHS] Playwright not available, cannot bootstrap cookies.")
-        return None
+    # 2. Try headless refresh (skip when force=True — user wants fresh login)
+    if not force:
+        headless = _refresh_cookie_headless()
+        if headless and _validate_cookie_search(headless):
+            return headless
+        if headless:
+            print("[XHS] Headless cookie obtained but search page validation failed. Falling back to visible browser...")
 
-    # Try MediaCrawler's cached profile
-    media_crawler_profile = Path("D:/Claude code/MediaCrawler/browser_data/xhs_user_data_dir")
+    # 3. Open visible browser as last resort
+    media_crawler_profile = Path(_load_path_config(
+        "media_crawler_profile",
+        "D:/Claude code/MediaCrawler/browser_data/xhs_user_data_dir"
+    ))
 
-    with sync_playwright() as p:
+    # Determine user_data_dir: skip persistent profile when force=True
+    if force:
+        user_data_dir = None
+    else:
+        user_data_dir = str(media_crawler_profile) if media_crawler_profile.exists() else None
+
+    if force:
+        _delete_cached_cookies()
+        print("[XHS] Old cookies deleted.")
         if media_crawler_profile.exists():
-            browser_context = p.chromium.launch_persistent_context(
-                user_data_dir=str(media_crawler_profile),
-                headless=False,
-                viewport={"width": 1920, "height": 1080},
-            )
-        else:
-            browser = p.chromium.launch(headless=False)
-            browser_context = browser.new_context(viewport={"width": 1920, "height": 1080})
+            print("[XHS] Skipping persistent profile — launching fresh browser for new account.")
 
-        page = browser_context.new_page()
+    ctx, browser, pw = launch_context(headless=False, user_data_dir=user_data_dir)
+    try:
+        page = ctx.new_page()
         page.goto(WEB_HOST, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
 
-        # Check login state
-        try:
-            page.wait_for_selector("xpath=//a[contains(@href, '/user/profile/')]//span[text()='我']",
-                                   timeout=10000)
-            print("[XHS] Login detected via cached profile.")
-        except Exception:
-            print("[XHS] Not logged in. Please scan QR code in the browser window...")
-            print("[XHS] Waiting up to 120 seconds for login...")
+        if force:
+            print("[XHS] Please scan QR code with your NEW account...")
+            print("[XHS] Waiting up to 150 seconds for login...")
             try:
                 page.wait_for_selector(
                     "xpath=//a[contains(@href, '/user/profile/')]//span[text()='我']",
-                    timeout=120000,
+                    timeout=150000,
                 )
-                print("[XHS] Login successful!")
+                print("[XHS] New account login detected!")
             except Exception:
-                print("[XHS] Login timeout. Please run MediaCrawler once to login first.")
-                browser_context.close()
+                print("[XHS] Login timeout. Please try again.")
                 return None
+        else:
+            try:
+                page.wait_for_selector("xpath=//a[contains(@href, '/user/profile/')]//span[text()='我']",
+                                       timeout=10000)
+                print("[XHS] Login detected via cached profile.")
+            except Exception:
+                print("[XHS] Not logged in. Please scan QR code in the browser window...")
+                print("[XHS] Waiting up to 120 seconds for login...")
+                try:
+                    page.wait_for_selector(
+                        "xpath=//a[contains(@href, '/user/profile/')]//span[text()='我']",
+                        timeout=120000,
+                    )
+                    print("[XHS] Login successful!")
+                except Exception:
+                    print("[XHS] Login timeout. Please run MediaCrawler once to login first.")
+                    return None
 
-        # Extract cookies
-        cookies = browser_context.cookies()
+        cookies = ctx.cookies()
         cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-        browser_context.close()
-
         _save_cookies(cookie_str)
         return cookie_str
+    finally:
+        if browser:
+            browser.close()
+        else:
+            ctx.close()
+        pw.stop()
 
 
 def get_cookie_string(allow_bootstrap: bool = True) -> Optional[str]:
-    """Get XHS cookie string from cache. Auto-bootstraps if cache is empty."""
+    """Get XHS cookie string. Validates cached cookie before returning.
+
+    If cached cookie is expired or nearly expired, attempts headless refresh first.
+    Falls back to visible browser bootstrap if allow_bootstrap=True.
+    """
     cookie = _load_cached_cookies()
-    if not cookie and allow_bootstrap:
+    if cookie:
+        # Proactive check: cookie within 1h of TTL expiry
+        if COOKIE_FILE.exists():
+            try:
+                data = json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
+                age = time.time() - data.get("saved_at", 0)
+                if age > (COOKIE_TTL_SEC - COOKIE_PROACTIVE_REFRESH_SEC):
+                    print("[XHS] Cookie near expiry, attempting headless refresh...")
+                    headless = _refresh_cookie_headless()
+                    if headless:
+                        return headless
+            except Exception:
+                pass
+        return cookie
+
+    if allow_bootstrap:
         cookie = bootstrap_cookies()
     return cookie
 
@@ -179,6 +382,7 @@ class XhsApiClient:
             )
 
     def _get(self, uri: str, params: dict) -> dict:
+        get_limiter("xhs").acquire()
         headers = self._sign_headers(uri, params, "GET")
         headers["Cookie"] = self.cookie_str
         headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -204,6 +408,7 @@ class XhsApiClient:
         raise Exception(f"XHS API error: {msg or resp.text[:200]}")
 
     def _post(self, uri: str, payload: dict) -> dict:
+        get_limiter("xhs").acquire()
         headers = self._sign_headers(uri, payload, "POST")
         headers["Cookie"] = self.cookie_str
         headers["Content-Type"] = "application/json;charset=UTF-8"
@@ -272,7 +477,9 @@ class XhsApiClient:
 # Replaces xhshow-based metadata extraction. Comment fetching still uses xhshow.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_XHS_DOWNLOADER_PATH = "D:/Claude code/Github skills/XHS-Downloader"
+_XHS_DOWNLOADER_PATH = _load_path_config(
+    "xhs_downloader", "D:/Claude code/Github skills/XHS-Downloader"
+)
 _XHS_DL_AVAILABLE = False
 if Path(_XHS_DOWNLOADER_PATH).exists():
     import sys as _sys
@@ -282,7 +489,10 @@ if Path(_XHS_DOWNLOADER_PATH).exists():
         from source import XHS as _XHS
         _XHS_DL_AVAILABLE = True
     except ImportError:
-        pass
+        print(f"[XHS] XHS-Downloader found but 'source.XHS' import failed at {_XHS_DOWNLOADER_PATH}")
+else:
+    print(f"[XHS] XHS-Downloader path not found: {_XHS_DOWNLOADER_PATH}. "
+          "Set 'paths.xhs_downloader' in engine/config.json or XHS_DOWNLOADER env var.")
 
 
 def _fetch_xhs_metadata_via_downloader(url: str) -> dict | None:
@@ -435,12 +645,18 @@ def _fetch_comments_only(note_id: str, xsec_token: str, max_comments: int) -> li
 
 
 def _fetch_via_xhshow(note_id, xsec_token, xsec_source, url, max_comments):
-    """Fetch note + comments via xhshow API. Returns (note, comments, error_dict)."""
-    cookie_str = get_cookie_string(allow_bootstrap=True)
+    """Fetch note + comments via xhshow API. Returns (note, comments, error_dict).
+
+    On XHS_COOKIE_EXPIRED: attempts headless refresh only. Does NOT open
+    visible browser (that's a deliberate choice — the daemon pipeline can't
+    scan QR codes). Returns a clear error telling the user to run manual
+    bootstrap if headless refresh fails.
+    """
+    cookie_str = get_cookie_string(allow_bootstrap=False)
     if not cookie_str:
         return None, [], _error_result(
             "小红书登录未完成", url,
-            "Login required. A browser window should open for QR code scanning.",
+            "Login required. Run: python -c \"from engine.xhs_fetcher import bootstrap_cookies; bootstrap_cookies(force=True)\"",
         )
     client = XhsApiClient(cookie_str)
     try:
@@ -450,12 +666,15 @@ def _fetch_via_xhshow(note_id, xsec_token, xsec_source, url, max_comments):
     except Exception as e:
         err_msg = str(e)
         if "XHS_COOKIE_EXPIRED" in err_msg:
+            # Delete expired cache
             if COOKIE_FILE.exists():
                 COOKIE_FILE.unlink()
-            cookie_str = bootstrap_cookies(force=True)
-            if cookie_str:
+            # Try headless refresh, not visible browser
+            print("[XHS] Cookie expired. Attempting headless refresh...")
+            headless = _refresh_cookie_headless()
+            if headless:
                 client.close()
-                client = XhsApiClient(cookie_str)
+                client = XhsApiClient(headless)
                 try:
                     note = client.get_note_detail(note_id, xsec_token, xsec_source)
                     comments_raw = client.get_note_comments(note_id, xsec_token, max_comments)
@@ -466,7 +685,8 @@ def _fetch_via_xhshow(note_id, xsec_token, xsec_source, url, max_comments):
                     )
             return None, [], _error_result(
                 "小红书Cookie已过期", url,
-                "Cookie expired and re-login failed.",
+                "Cookie expired and headless refresh failed. "
+                "Run: python -c \"from engine.xhs_fetcher import bootstrap_cookies; bootstrap_cookies(force=True)\"",
             )
         return None, [], _error_result(f"抓取失败: {err_msg}", url, err_msg)
     finally:

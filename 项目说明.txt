@@ -1,10 +1,10 @@
 舆情智能标注与分流决策系统
 ================================
 
-版本: v1.7.0
-日期: 2026-05-16
-代码规模: 6,690行 Python (engine + UI + tests)
-测试覆盖: 69项，全平台零回归
+版本: v5.1.0
+日期: 2026-05-28
+代码规模: ~13,000 行 Python (engine + agents + ui + tests)
+测试覆盖: 102 项，全平台零回归
 GitHub: https://github.com/evanhan1995/opinion-annotation-demo
 
 
@@ -12,9 +12,14 @@ GitHub: https://github.com/evanhan1995/opinion-annotation-demo
 --------------
 
 一个基于大语言模型（LLM）与 Wiki 知识库驱动的舆情智能标注系统。
-用户输入社交媒体链接，系统自动抓取内容 + 评论区 → AI 完成严重度
-评级（P0-P3）、分流建议、情感分析、风险标签、评论区红绿灯 →
-自动存入知识库 → 知识库驱动 AI 标注准确率持续提升。
+用户输入社交媒体链接或配置关键词巡检，系统自动抓取内容 + 评论区 →
+AI 完成严重度评级（P0-P3）、分流建议、情感分析、风险标签、评论区
+红绿灯 → 自动存入知识库 → 知识库驱动 AI 标注准确率持续提升。
+
+系统采用多 Agent 协作架构（Orchestrator / Monitor / Analyst / Curator /
+Handler / Reporter），各司其职、独立决策边界。结合 Cron 定时调度 +
+自动化流水线（Monitor→标引→入库→处置→日报），实现从舆情发现到
+日报输出的全自动闭环。
 
 系统设计理念源自 Andrej Karpathy 的 LLM Wiki 方法论：知识库不是
 静态文档，而是由 AI 全权维护、随案例增长的"活文档"。每一个新标
@@ -24,113 +29,158 @@ GitHub: https://github.com/evanhan1995/opinion-annotation-demo
 二、核心能力
 ------------
 
-1. 多平台舆情抓取
-   支持 5 个平台：YouTube、小红书、抖音、Reddit、X (Twitter)
-   - YouTube: yt-dlp 抓取，含标题/描述/播放量/评论，可选字幕抓取
-   - 小红书: XHS-Downloader 无 Cookie 元数据抓取 + xhshow API 评论抓取
-   - 抖音: TikTokDownloader 抓取，含 147 字段元数据 + 评论
-   - Reddit / X: Playwright 浏览器自动化抓取
+1. 多平台舆情抓取（9 平台）
+   - YouTube:     yt-dlp 抓取，含标题/描述/播放量/评论，可选字幕
+   - 小红书:       XHS-Downloader 无 Cookie 元数据 + xhshow API 评论
+   - 抖音:         TikTokDownloader 抓取，含 147 字段元数据 + 评论
+   - B站:          bilibili-api-python（纯 API，需 SESSDATA Cookie）
+   - 微博:         crawl4weibo（Playwright 浏览器，免登录）
+   - 微信公众号:   wechatarticles + 公开页面 HTML 解析
+   - X (Twitter):  Playwright 浏览器自动化抓取
+   - Reddit:       Playwright 浏览器自动化抓取
+   - 通用网页:     自动检测或手动指定平台
 
 2. AI 自动标注
    - 严重度评级: P0(紧急) / P1(立即处理) / P2(持续观察) / P3(可忽略)
    - 分流建议: 立即处理 / 持续观察 / 可忽略 / 正面可利用
-   - 情感分析: 多维度情感标签
+   - 情感分析: 品牌/产品/竞品 三维独立情感判断
    - 风险标签: 安全 / 质量 / 客服 / 竞品攻击 / KOL负面 / 大规模传播 等
    - 评论区红绿灯: 红(负面主流) / 黄(混合/争议) / 绿(正面/可控)
-   - 舆情分类: 商品问题 / 商品侵权 / 售后问题 / 数据泄露 / 软件问题 等
+   - 负面阈值判断: 自动判定是否"真实抱怨"、"传播扩散"、"评论区翻车"
    - 流式输出: 标注结果逐字生成，实时可见
-   - 近似舆情匹配: 自动匹配知识库中最相似的已有案例
+   - 多 Provider 支持: DeepSeek / Ark / MiniMax / OpenAI 可切换
 
 3. 知识库引擎
    - 自动 Ingest: 每次标注完成后自动生成 Wiki 案例页面
    - 活文档: 案例驱动标注规范持续校准
-   - 三维索引: 按严重度 / 分流建议 / 平台三维交叉检索
+   - 三维索引: 按严重度 / 分流建议 / 平台 / 状态 交叉检索
    - 跨条目关联: 自动检测跨平台事件的碎片化舆情并聚合
    - 作者库: 跨平台作者/账号聚合追踪
-   - 巡检监控: 指定 URL 列表定时检查新增变化
-   - P0/P1 告警: 严重案例自动醒目标识
+   - 密码保护: 知识库内容可设置访问密码
 
 4. 人工纠偏
    - 支持人工修改 AI 标注结果
    - 差异对比: 自动 diff 人工 vs AI，高亮显著变更
    - 纠偏回灌: 人工修正结果作为校准案例存入知识库
+   - 历史纠偏率约 67%
 
-5. 智能问答（扫地僧）
-   - 基于知识库的自然语言问答
-   - 支持跨平台关联查询
-   - 回答附带引用来源链接
+5. Monitor 关键词巡检
+   - 按关键词 + 平台组合定时或手动巡检
+   - 支持按热度排序 / 按时间排序
+   - 自动去重，仅新增新发现内容
+   - 巡检结果 Excel 导出
+   - 支持 6 平台关键词搜索：YTB / 小红书 / 抖音 / B站 / 微博 / 公众号
 
-6. Web 操作界面
-   - Streamlit Web UI，5 个 Tab
-   - Tab1 手工录入: 手动粘贴舆情内容进行标注
-   - Tab2 URL 抓取: 粘贴链接自动抓取+标注，支持批量模式
-   - Tab3 知识库浏览器: 浏览/搜索所有 Wiki 页面，密码保护
-   - Tab4 扫地僧: 自然语言问答知识库
-   - Tab5 操作演示: 引导式 Demo
-   - 部署: Streamlit Cloud 一键部署
+6. 高危舆情追踪
+   - 标记高风险案例为"持续追踪"
+   - 自动定期抓取播放量/点赞/评论/分享增量
+   - 时间序列数据存储与趋势可视化
+   - 变化率告警阈值
+
+7. 自动化流水线 + 定时调度
+   - 5 步流水线: Monitor抓取 → AI标注 → 入库 → 案例处置 → 生成日报
+   - Cron 定时调度: 巡检每 6h / 日报每日 21:00 / 月报每月 1 日 09:00
+   - 线程安全锁 + 超时保护 (30min)
+   - 进度实时展示，支持手动触发和自动模式
+
+8. 通知告警
+   - 飞书 Webhook 通知（P0 / P0+P1 分级触发）
+   - 企业微信 Webhook 支持
+   - Windows 桌面弹窗告警（MessageBox）
+
+9. 日报 / 月报自动生成
+   - 模板化报告（Markdown），含舆情概览 / 高优案例 / 趋势分析
+   - 自动统计平台分布、严重度分布、新增/跟进/关闭数量
+   - 日报每日 21:00 自动生成，月报每月 1 日自动生成
+
+10. 角色权限系统
+    - 管理员: 全部 8 个 Tab
+    - 监测组: 总览 / 录入研判 / 知识库 / 设置
+    - 处置组: 总览 / 案例处置 / 知识库 / 设置
+    - 日报编辑: 总览 / 报告 / 知识库 / 设置
+    - SHA-256 密码哈希，独立 Salt
+
+11. 智能问答（管理员AI）
+    - 基于知识库的自然语言问答
+    - 支持跨平台关联查询
+    - 回答附带引用来源链接
+    - 对话历史上下文
+
+12. Web 操作界面（8 Tab）
+    - 📊 总览:      仪表板，关键指标 + 快捷操作
+    - 📡 Monitor:   关键词管理 + 巡检执行
+    - 📝 录入研判:  手动录入 / URL 抓取 / 批量导入 / 标注
+    - 📋 案例处置:  案例状态管理、指派、跟进
+    - 📚 知识库:    分类导航 + 页面浏览 + 管理员AI问答
+    - 📊 报告:      日报 / 月报浏览
+    - ⚠️ 高危追踪:  高风险案例持续监控 + 趋势图表
+    - ⚙️ 设置:      API Key / Provider / 知识库密码 / 公众号Cookie / 通知
 
 
 三、解决什么问题
 ----------------
 
-1. 舆情研判效率问题
-   传统人工舆情研判需要分析师逐条阅读、评级、分流。本系统将
-   单条舆情的处理时间从 ~5分钟 压缩到 ~3秒，加速约 100 倍。
+1. 舆情研判效率
+   传统人工舆情研判需逐条阅读、评级、分流。本系统将单条舆情
+   处理时间从 ~5分钟 压缩到 ~3秒，加速约 100 倍。
 
-2. 标注一致性难题
-   不同分析师对同一舆情的评级可能不一致。系统通过知识库案例驱
-   动的标注规范，实现可追溯、可复现的标准化标注。人工纠偏机制
-   进一步保证标注质量，历史纠偏率约 67%。
+2. 标注一致性
+   不同分析师对同一舆情的评级可能不一致。系统通过知识库案例
+   驱动的标注规范，实现可追溯、可复现的标准化标注。
 
 3. 跨平台碎片化
    同一舆情事件可能分散在 YouTube、小红书、抖音等多个平台。
    系统自动检测跨条目关联，聚合碎片化舆情为完整事件画像。
 
 4. 知识沉淀与传承
-   资深分析师的判断经验往往难以系统化传递。系统的知识库引擎
-   将每一次标注转化为结构化案例，形成可检索、可引用的组织记忆。
+   每一次标注转化为结构化案例，形成可检索、可引用的组织记忆。
 
 5. 舆情监控闭环
-   从"发现问题"到"分析问题"到"给出建议"到"归档学习"，
-   形成完整的信息闭环。不再是"看过就忘"的一次性操作。
+   从"发现"→"分析"→"建议"→"归档"→"日报"，完整信息闭环。
+   配合定时调度器实现 7×24 无人值守自动巡检。
 
 6. 批量处理能力
-   支持批量 URL 导入，一次性处理多条舆情，适合定期巡检和
-   集中排查场景。
+   支持批量 URL 导入 + 关键词巡检，一次性处理多条舆情。
 
-7. 实时评论区分析
-   不仅分析帖子本身，还抓取并分析评论区情绪走向，识别
+7. 评论区隐性风险
+   不仅分析帖子本身，还分析评论区情绪走向，识别
    "帖子无害但评论区翻车"的隐性风险。
 
-8. 多平台覆盖
-   覆盖国内外主流社交媒体平台（YouTube、小红书、抖音、
-   Reddit、X），无需为每个平台配置单独的工具。
+8. 高危舆情持续追踪
+   对高风险舆情持续监控流量变化，第一时间发现扩散趋势。
 
 
 四、适用场景
 ------------
 
 - 出海品牌舆情监控: 监控海外主流平台（YouTube、Reddit、X）
-  及国内出海平台（TikTok、小红书）的品牌舆情
+  及国内平台（抖音、B站、小红书、微博、微信公众号）
 - 电商平台客服质检: 批量分析用户投诉帖，快速判定严重度
 - 竞品舆情分析: 系统性追踪竞品的负面/正面舆情
 - 突发事件响应: 快速评估突发舆情事件的严重程度和扩散风险
-- 舆情分析团队日常: 替代人工初筛，人工仅处理边界案例和纠偏
+- 日常巡检: 定时自动巡检关键词，替代人工重复搜索
+- 舆情分析团队日常: AI 初筛 + 人工处置边界案例
 
 
 五、技术架构
 ------------
 
-架构模型（信息论视角）:
+架构模型（多 Agent 协作）:
 
-  URL → [Scraper 5平台] → raw/cases/
-    → [Annotate LLM标注] → outputs/
-    → [Ingestor 知识库引擎] → wiki/cases/
-    → [Agent 扫地僧] ← 知识库检索
+  Cron Scheduler ─→ Pipeline ─→ Monitor Agent (关键词巡检)
+                  │             ├→ Analyst Agent (LLM标注)
+                  │             ├→ Curator Agent (入库+关联)
+                  │             ├→ Handler Agent (案例处置)
+                  │             └→ Reporter Agent (日报生成)
+
+  手动入口: URL → scraper.py (9平台抓取) → annotate.py (LLM标注)
+            → ingestor.py (入库) → curator.py (关联+索引)
+
+  知识库: wiki/cases/ + wiki/authors/ (AI全权维护，按平台/严重度/状态索引)
 
 核心原则:
   - raw/ 永不修改（原始数据只追加）
-  - wiki/ 由 AI 全权维护（人类通过投放案例间接影响）
+  - wiki/ 由 AI 全权维护（人类通过纠偏间接影响）
   - 每次操作有日志（wiki/log.md append-only）
   - 规则来自案例（不凭空调整标注规范）
   - 信息闭环（任何自动生成的信息可被未来系统消费）
@@ -141,11 +191,14 @@ GitHub: https://github.com/evanhan1995/opinion-annotation-demo
 
 - Python >= 3.12
 - Streamlit (Web UI)
-- Playwright (Reddit / X 抓取)
+- Playwright (微博 / X / Reddit 浏览器抓取)
 - yt-dlp (YouTube 抓取)
-- XHS-Downloader (小红书元数据抓取，可选)
+- bilibili-api-python (B站抓取)
+- crawl4weibo (微博抓取)
+- wechatarticles (微信公众号搜索)
+- XHS-Downloader (小红书抓取)
 - TikTokDownloader (抖音抓取，需 Cookie)
-- DeepSeek / OpenAI API (LLM 标注)
+- DeepSeek / Ark / MiniMax / OpenAI API (LLM 标注)
 - 详见 requirements.txt
 
 
@@ -153,30 +206,63 @@ GitHub: https://github.com/evanhan1995/opinion-annotation-demo
 ------------
 
 舆情标注Wiki/
-├── app.py                  Web UI 入口
-├── DESIGN.md               深化设计方案
-├── CLAUDE.md               AI Agent 操作手册
+├── app.py                     Web UI 入口（8 Tab + 认证 + 流水线锁）
+├── pipeline.py                5 步自动化流水线
+├── scheduler.py               Cron 定时调度器（巡检/日报/月报）
+├── monitor_keywords.json      巡检关键词配置
+├── notification_config.json   通知配置（飞书/企微/桌面弹窗）
+├── DESIGN.md                  深化设计方案
+├── CLAUDE.md                  AI Agent 操作手册
+├── PRD.md                     产品需求文档
 ├── engine/
-│   ├── scraper.py          多平台抓取调度
-│   ├── xhs_fetcher.py      小红书抓取器（双信道）
-│   ├── tt_fetcher.py       抖音抓取器
-│   ├── annotate.py         LLM 标注引擎
-│   ├── ingestor.py         自动 Ingest 管线
-│   ├── agent.py            扫地僧问答引擎
-│   ├── linker.py           跨条目关联检测
-│   ├── correction_handler.py 人工纠偏处理
-│   └── index_mgr.py        共享索引管理
-├── ui/
-│   ├── shared.py           共享渲染函数
-│   ├── sidebar.py          侧边栏
-│   ├── tab1_manual.py      手工录入 Tab
-│   ├── tab2_url.py         URL 抓取 Tab
-│   └── tab5_demo.py        操作演示 Tab
-├── tests/                  69 项测试
-├── wiki/                   知识库
-│   ├── cases/              标注案例库
-│   ├── concepts/           标注概念
-│   ├── syntheses/          标注规范活文档
-│   └── log.md              操作日志
-├── raw/                    原始资料（只读）
-└── outputs/                标注结果存档
+│   ├── scraper.py             9 平台抓取调度（含评论抓取）
+│   ├── annotate.py            LLM 标注引擎（多 Provider）
+│   ├── ingestor.py            自动 Ingest 管线（Wiki 页面生成）
+│   ├── agent.py               管理员AI问答引擎
+│   ├── linker.py              跨条目关联检测
+│   ├── correction_handler.py  人工纠偏处理
+│   ├── index_mgr.py           知识库共享索引管理
+│   ├── tracker.py             高危舆情追踪引擎（时序数据）
+│   ├── auth.py                角色权限认证（SHA-256）
+│   ├── xhs_fetcher.py         小红书抓取器（双信道）
+│   ├── tt_fetcher.py          抖音抓取器（147字段）
+│   └── config.json            运行时配置（Provider/Key/WeChat）
+├── agents/                    多 Agent 协作层
+│   ├── orchestrator.py        Agent 编排调度
+│   ├── monitor.py             关键词巡检 Agent（6平台搜索）
+│   ├── analyst.py             舆情内容分析 Agent
+│   ├── curator.py             知识库保管员 Agent（入库/关联/索引）
+│   ├── handler.py             案例处置 Agent（状态管理）
+│   ├── daily_report.py        日报/月报生成 Agent
+│   ├── scraper.py             Agent 层抓取适配器
+│   └── shared.py              共享数据类型 + 工具函数
+├── ui/                        Streamlit UI 组件
+│   ├── login.py               登录页面
+│   ├── sidebar.py             侧边栏（用户信息/流水线/巡检）
+│   ├── shared.py              共享渲染函数 + Wiki 加载
+│   ├── theme.py               UI 主题 + CSS
+│   ├── tab_entry.py           录入研判 Tab
+│   ├── tab3_monitor.py        Monitor 仪表板 Tab
+│   ├── tab4_disposition.py    案例处置 Tab
+│   ├── tab_knowledge.py       知识库 + 管理员AI Tab
+│   ├── tab6_reports.py        报告浏览 Tab
+│   ├── tab_tracking.py        高危追踪 Tab
+│   └── tab_settings.py        系统设置 Tab
+├── config/
+│   ├── auth_config.json       用户账户 + 角色
+│   └── scheduler_config.json  调度器配置
+├── prompts/                   系统提示词模板
+├── templates/                 日报/月报 Markdown 模板
+├── tests/                     102 项测试 (8 文件, ~1,425 行)
+├── wiki/                      知识库
+│   ├── concepts/              标注概念 (5篇)
+│   ├── entities/              实体工具 (2篇)
+│   ├── sources/               来源摘要 (2篇)
+│   ├── reports/daily/         日报存档
+│   ├── reports/monthly/       月报存档
+│   ├── cases/                 案例库（运行流水线后自动生成）
+│   ├── authors/               作者库（运行流水线后自动生成）
+│   ├── index.md               全局索引
+│   └── log.md                 操作日志 (append-only)
+├── raw/                       原始资料（只读，只追加）
+└── outputs/                   标注结果 + Excel 导出

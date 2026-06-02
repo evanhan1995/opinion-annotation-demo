@@ -22,8 +22,8 @@ REQUIRED_KEYS = [
     "发布时间", "原文链接", "评论列表", "社媒数据", "_meta",
 ]
 
-TT_TEST_URL = "https://www.douyin.com/video/7640102676776209690"
-TT_VIDEO_ID = "7640102676776209690"
+TT_TEST_URL = "https://www.douyin.com/video/7645336397187943722"
+TT_VIDEO_ID = "7645336397187943722"
 
 
 class TestDouyinAdapter:

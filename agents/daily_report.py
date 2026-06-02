@@ -26,18 +26,8 @@ if sys.stdout and hasattr(sys.stdout, "buffer"):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 from agents.shared import (
-    get_llm, load_prompt, PROJECT_ROOT, WIKI_DIR,
+    get_llm, PROJECT_ROOT, WIKI_DIR,
 )
-
-DAILY_REPORT_PROMPT = ""
-
-
-def _get_prompt() -> str:
-    global DAILY_REPORT_PROMPT
-    if not DAILY_REPORT_PROMPT:
-        DAILY_REPORT_PROMPT = load_prompt("daily_report_system")
-    return DAILY_REPORT_PROMPT
-
 
 REPORTS_DAILY_DIR = WIKI_DIR / "reports" / "daily"
 REPORTS_MONTHLY_DIR = WIKI_DIR / "reports" / "monthly"
@@ -127,6 +117,13 @@ def generate_daily(date_str: str = "") -> str:
     REPORTS_DAILY_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORTS_DAILY_DIR / f"{date_str}.md"
     report_path.write_text(content, encoding="utf-8")
+
+    # Also generate HTML version
+    try:
+        generate_daily_html(data)
+    except Exception:
+        pass  # HTML is optional enhancement
+
     return str(report_path)
 
 
@@ -156,95 +153,22 @@ def _load_report_example(report_type: str) -> str:
 
 
 def _build_daily_markdown(data: ReportData) -> str:
-    """Build daily report via LLM (DeepSeek).
+    """Build daily report via IR pipeline (LLM → validate → render).
 
-    1. If templates/daily_report_template.md exists → use it as format guide
-    2. If LLM fails → fallback to built-in template
+    v7.1: Uses engine.report_ir for structured generation with schema validation.
+    Falls back to template on LLM or validation failure.
     """
-    template = _read_template("daily_report_template.md")
+    from engine.report_ir import build_ir, fill_analysis, validate_ir, render_md
 
     try:
-        client, model = get_llm("deepseek")
-    except Exception:
-        return _build_daily_template(data)
-
-    p0p1_str = ""
-    for item in data.p0_p1_list:
-        p0p1_str += f"- [{item.get('severity', '?')}] {item.get('title', '?')} ({item.get('platform', '?')})\n"
-
-    platform_str = "\n".join(f"- {k}：{v} 条" for k, v in data.platform_dist.items()) if data.platform_dist else "暂无"
-
-    example = _load_report_example("daily")
-
-    if template:
-        prompt_parts = [
-            "根据以下舆情统计数据，严格按照提供的模板格式生成一份舆情日报。",
-            "",
-            "**模板格式**（必须严格遵循此结构）：",
-            "```",
-            template,
-            "```",
-        ]
-        if example:
-            prompt_parts.extend([
-                "",
-                "**参考示例**（以下是一份优秀日报的格式参考，请注意其：───分隔线风格、中文自然段落而非纯数据罗列、每个章节 2-4 句专业分析、关键数字加粗）：",
-                "```",
-                example,
-                "```",
-            ])
-        prompt_parts.extend([
-            "",
-            "**实际数据**：",
-            f"- 日期：{data.date}",
-            f"- 案例总数：{data.total_new_cases} 条（前7日均值：{data.avg_prev_7days} 条）",
-            f"- 情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%",
-            f"- 关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}",
-            f"- 严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}",
-            f"- 平台分布：{platform_str}",
-            f"- 处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}",
-            f"- P0/P1事件：\n{p0p1_str or '无'}",
-            "",
-            "要求：",
-            "1. 将数据填入模板中，用实际数据替换 {{占位符}}",
-            "2. 保持模板的章节结构不变，使用 ─── 作为一级分隔线",
-            "3. 每个章节写 2-4 句自然的中文分析段落，而非仅罗列数字",
-            "4. 突出异常数据和趋势变化，关键数字使用 **加粗**",
-            "5. 语气专业、客观，面向企业舆情管理团队",
-            "6. 只输出 Markdown，不要额外解释",
-        ])
-        prompt = "\n".join(prompt_parts)
-    else:
-        prompt = f"""根据以下舆情统计数据，生成一份专业的舆情日报（Markdown 格式）。
-
-日期：{data.date}
-案例总数：{data.total_new_cases} 条（前7日均值：{data.avg_prev_7days} 条）
-情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%
-关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}
-严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}
-平台分布：{platform_str}
-处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}
-P0/P1事件：
-{p0p1_str or '无'}
-
-要求：
-1. 标题为"# 舆情日报 {data.date}"
-2. 包含6个章节：一、声量概览 / 二、情感分布 / 三、关键议题 / 四、风险分级 / 五、平台分布 / 六、处置状态统计
-3. 每个章节简洁专业（2-4句），突出异常和趋势
-4. P0/P1事件需要单独列出
-5. 只输出 Markdown，不要额外解释"""
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=2048,
-            temperature=0.4,
-            timeout=60,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        content = response.choices[0].message.content
-        if content and content.startswith("#"):
-            return content
+        ir = build_ir(data, "daily")
+        ir = fill_analysis(ir)
+        ok, errors = validate_ir(ir)
+        if not ok:
+            ir = fill_analysis(ir, retry_hint=errors)
+            ok, _ = validate_ir(ir)
+        if ok:
+            return render_md(ir)
     except Exception:
         pass
 
@@ -279,73 +203,37 @@ def _build_daily_template(data: ReportData) -> str:
 
 # ── Monthly report ─────────────────────────────────────────────────────
 def generate_monthly(month_str: str = "") -> str:
-    """Generate monthly report from real case metrics.
+    """Generate monthly report via IR pipeline (LLM → validate → render).
 
-    1. If templates/monthly_report_template.md exists → LLM fills template
-    2. Fallback to built-in template
+    v7.1: Uses engine.report_ir for structured generation with schema validation.
+    Falls back to template on failure.
     """
     if not month_str:
         month_str = datetime.now().strftime("%Y-%m")
 
     data = _collect_report_data(month_str=month_str)
-    template = _read_template("monthly_report_template.md")
 
-    if template:
-        try:
-            client, model = get_llm("deepseek")
-            platform_str = "\n".join(f"- {k}：{v} 条" for k, v in data.platform_dist.items()) if data.platform_dist else "暂无"
-            example = _load_report_example("monthly")
+    from engine.report_ir import build_ir, fill_analysis, validate_ir, render_md
 
-            prompt_parts = [
-                "根据以下舆情统计数据，严格按照提供的模板格式生成一份舆情月报。",
-                "",
-                "**模板格式**（必须严格遵循此结构）：",
-                "```",
-                template,
-                "```",
-            ]
-            if example:
-                prompt_parts.extend([
-                    "",
-                    "**参考示例**（注意其───分隔线、自然段落分析、趋势判断风格）：",
-                    "```",
-                    example,
-                    "```",
-                ])
-            prompt_parts.extend([
-                "",
-                "**实际数据**：",
-                f"- 月份：{month_str}",
-                f"- 案例总数：{data.total_new_cases} 条",
-                f"- 情感分布：正面 {_pct(data.sentiment_dist, '正面')}% / 中性 {_pct(data.sentiment_dist, '中性')}% / 负面 {_pct(data.sentiment_dist, '负面')}%",
-                f"- 关键议题：{', '.join(data.top_issues) if data.top_issues else '无'}",
-                f"- 严重度分布：P0={data.severity_dist.get('P0',0)}, P1={data.severity_dist.get('P1',0)}, P2={data.severity_dist.get('P2',0)}, P3={data.severity_dist.get('P3',0)}",
-                f"- 平台分布：{platform_str}",
-                f"- 处置状态：待跟进={data.status_dist.get('待跟进',0)}, 处理中={data.status_dist.get('处理中',0)}, 已处理={data.status_dist.get('已处理',0)}, 已放弃={data.status_dist.get('已放弃',0)}, 忽略={data.status_dist.get('忽略',0)}",
-                "",
-                "要求：",
-                "1. 将数据填入模板中，用实际数据替换 {{占位符}}",
-                "2. 保持模板的章节结构不变，使用 ─── 作为一级分隔线",
-                "3. 每个章节写 2-4 句自然的中文分析段落，包含趋势判断和环比对比",
-                "4. 突出异常数据和趋势变化，关键数字使用 **加粗**",
-                "5. 七八章（效率统计和下月建议）给出有数据支撑的具体建议",
-                "6. 语气专业、客观，面向企业舆情管理团队",
-                "7. 只输出 Markdown，不要额外解释",
-            ])
-            prompt = "\n".join(prompt_parts)
-
-            response = client.chat.completions.create(
-                model=model, max_tokens=2048, temperature=0.4, timeout=60,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = response.choices[0].message.content
-            if content and content.startswith("#"):
-                REPORTS_MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
-                report_path = REPORTS_MONTHLY_DIR / f"{month_str}.md"
-                report_path.write_text(content, encoding="utf-8")
-                return str(report_path)
-        except Exception:
-            pass
+    try:
+        ir = build_ir(data, "monthly")
+        ir = fill_analysis(ir)
+        ok, errors = validate_ir(ir)
+        if not ok:
+            ir = fill_analysis(ir, retry_hint=errors)
+            ok, _ = validate_ir(ir)
+        if ok:
+            content = render_md(ir)
+            REPORTS_MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
+            report_path = REPORTS_MONTHLY_DIR / f"{month_str}.md"
+            report_path.write_text(content, encoding="utf-8")
+            try:
+                generate_monthly_html(data)
+            except Exception:
+                pass
+            return str(report_path)
+    except Exception:
+        pass
 
     # Fallback: built-in template
     content = f"""# 舆情月报 {month_str}
@@ -377,7 +265,41 @@ def generate_monthly(month_str: str = "") -> str:
     REPORTS_MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORTS_MONTHLY_DIR / f"{month_str}.md"
     report_path.write_text(content, encoding="utf-8")
+    try:
+        generate_monthly_html(data)
+    except Exception:
+        pass
     return str(report_path)
+
+
+# ── HTML Report (v7.1 — IR-based) ──────────────────────────────────────
+
+def generate_daily_html(data: ReportData) -> str:
+    """Generate offline HTML report from IR. Returns path to HTML file."""
+    from engine.report_ir import build_ir, render_html
+    try:
+        ir = build_ir(data, "daily")
+        html = render_html(ir)
+    except Exception:
+        return ""
+    REPORTS_DAILY_DIR.mkdir(parents=True, exist_ok=True)
+    html_path = REPORTS_DAILY_DIR / f"{data.date}.html"
+    html_path.write_text(html, encoding="utf-8")
+    return str(html_path)
+
+
+def generate_monthly_html(data: ReportData) -> str:
+    """Generate offline HTML monthly report from IR. Returns path to HTML file."""
+    from engine.report_ir import build_ir, render_html
+    try:
+        ir = build_ir(data, "monthly")
+        html = render_html(ir)
+    except Exception:
+        return ""
+    REPORTS_MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
+    html_path = REPORTS_MONTHLY_DIR / f"{data.date}.html"
+    html_path.write_text(html, encoding="utf-8")
+    return str(html_path)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

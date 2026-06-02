@@ -122,7 +122,7 @@ def _get_prompt_layers(user_content: str = "") -> list[tuple[str, str]]:
 
 PLATFORM_LIST = [
     "小红书", "YouTube", "Instagram", "TikTok", "X", "X (Twitter)", "Twitter",
-    "Reddit", "新闻媒体", "论坛", "其他"
+    "Reddit", "新闻媒体", "论坛", "其他", "B站", "微博", "微信公众号", "抖音"
 ]
 
 CATEGORY_OPTIONS = [
