@@ -268,6 +268,190 @@ def _get_kb_password() -> str:
         return ""
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Taxonomy management panel (Phase 1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+TAXONOMY_FILES = {
+    "narrative_categories": ("叙事分类", False),
+    "risk_tags": ("风险标签", True),
+    "disposition_actions": ("处置动作", True),
+}
+
+TAX_KEY = "tax_"
+
+
+def _render_taxonomy_panel():
+    """Render the taxonomy management sub-tab panel."""
+    st.markdown("**🏷️ 词表管理**")
+    st.caption("管理受控词表：叙事分类、风险标签、处置动作，以及候选标签审批。")
+
+    sub_tabs = ["📂 叙事分类", "⚠️ 风险标签", "📋 处置动作", "✅ 候选审批"]
+    sel_tab = st.radio(
+        "词表子页", sub_tabs, horizontal=True, label_visibility="collapsed",
+        key=f"{TAX_KEY}sub_tab",
+    )
+
+    if sel_tab == "📂 叙事分类":
+        _render_taxonomy_tree("narrative_categories")
+    elif sel_tab == "⚠️ 风险标签":
+        _render_taxonomy_tree("risk_tags")
+    elif sel_tab == "📋 处置动作":
+        _render_taxonomy_tree("disposition_actions")
+    else:
+        _render_candidate_manager()
+
+
+def _render_taxonomy_tree(tax_name: str):
+    """Render an editable tree view for a taxonomy."""
+    try:
+        from engine.taxonomy_mgr import (
+            load_taxonomy_cached, add_l2_node, remove_l2_node, add_l1_node,
+        )
+        tax = load_taxonomy_cached(tax_name)
+    except Exception as e:
+        st.error(f"无法加载词表: {e}")
+        return
+
+    tm_label, is_flat = TAXONOMY_FILES[tax_name]
+
+    # Add new L1 category
+    with st.expander("➕ 添加大类", expanded=False):
+        new_l1 = st.text_input("新大类名称", key=f"{TAX_KEY}{tax_name}_l1_name", placeholder="输入新的大类名称")
+        new_l1_desc = st.text_input("定义（可选）", key=f"{TAX_KEY}{tax_name}_l1_desc", placeholder="一句话描述")
+        if st.button("添加大类", key=f"{TAX_KEY}{tax_name}_l1_add", use_container_width=True):
+            if new_l1.strip():
+                ok = add_l1_node(tax_name, new_l1.strip(), new_l1_desc.strip())
+                if ok:
+                    st.success(f"已添加大类「{new_l1}」")
+                    st.rerun()
+                else:
+                    st.warning(f"大类「{new_l1}」已存在")
+            else:
+                st.warning("请输入大类名称")
+
+    # Render L1 → L2 tree
+    for l1 in tax.nodes:
+        l2_count = len(l1.children)
+        with st.expander(f"📁 {l1.name} ({l2_count} 项)", expanded=False):
+            if l1.description:
+                st.caption(f"定义: {l1.description}")
+
+            # List L2 children
+            for l2 in l1.children:
+                c1, c2 = st.columns([6, 1])
+                with c1:
+                    if is_flat:
+                        desc = f" — {l2.description}" if l2.description else ""
+                        st.markdown(f"• **{l2.name}**{desc}")
+                    else:
+                        kw_str = ", ".join(l2.keywords) if l2.keywords else "无关键词"
+                        st.markdown(f"• **{l2.name}** `{kw_str}`")
+
+                with c2:
+                    if st.button("🗑️", key=f"{TAX_KEY}del_{tax_name}_{l1.name}_{l2.name}",
+                                 help=f"删除 {l2.name}"):
+                        remove_l2_node(tax_name, l1.name, l2.name)
+                        st.success(f"已删除「{l2.name}」")
+                        st.rerun()
+
+            # Add new L2 under this L1
+            st.divider()
+            st.caption(f"添加子项到「{l1.name}」")
+            if is_flat:
+                a1_name = st.text_input(
+                    "名称", key=f"{TAX_KEY}{tax_name}_{l1.name}_a_name",
+                    placeholder="标签名称",
+                )
+                a1_desc = st.text_input(
+                    "描述", key=f"{TAX_KEY}{tax_name}_{l1.name}_a_desc",
+                    placeholder="一句话描述",
+                )
+                a1_kw = ""
+            else:
+                a1_name = st.text_input(
+                    "子类名称", key=f"{TAX_KEY}{tax_name}_{l1.name}_a_name",
+                    placeholder="子类名称",
+                )
+                a1_kw = st.text_input(
+                    "关键词（逗号分隔）", key=f"{TAX_KEY}{tax_name}_{l1.name}_a_kw",
+                    placeholder="关键词1, 关键词2",
+                )
+
+            if st.button("添加", key=f"{TAX_KEY}{tax_name}_{l1.name}_add"):
+                if a1_name.strip():
+                    keywords = [k.strip() for k in a1_kw.split(",") if k.strip()] if a1_kw else []
+                    ok = add_l2_node(tax_name, l1.name, a1_name.strip(), keywords=keywords)
+                    if ok:
+                        st.success(f"已添加「{a1_name}」")
+                        st.rerun()
+                    else:
+                        st.warning(f"「{a1_name}」已存在")
+                else:
+                    st.warning("请输入名称")
+
+
+def _render_candidate_manager():
+    """Render candidate tag approval/rejection UI."""
+    try:
+        from engine.taxonomy_mgr import _load_candidates, approve_candidate, reject_candidate
+        data = _load_candidates()
+    except Exception as e:
+        st.error(f"无法加载候选标签: {e}")
+        return
+
+    pending = data.get("pending", [])
+    approved = data.get("approved", [])
+    rejected = data.get("rejected", [])
+
+    st.markdown(f"**待审批** ({len(pending)})")
+    if not pending:
+        st.info("暂无待审批的候选标签。候选标签由 LLM 在标注时自动生成，会出现在这里供审核。")
+
+    for entry in pending:
+        label = entry.get("label", "?")
+        cat = entry.get("category", "?")
+        source = entry.get("source", "")
+        c1, c2, c3 = st.columns([5, 1, 1])
+        with c1:
+            st.markdown(f"• **{label}** `{cat}` {source}")
+        with c2:
+            if st.button("✅", key=f"{TAX_KEY}approve_{label}", help=f"通过 {label}"):
+                # Try to auto-add to taxonomy
+                if cat in ("risk_tag", "risk_tags"):
+                    tax_name = "risk_tags"
+                elif cat in ("narrative_category", "narrative_categories"):
+                    tax_name = "narrative_categories"
+                else:
+                    tax_name = "disposition_actions"
+                # Find parent L1 for narrative
+                try:
+                    from engine.taxonomy_mgr import add_l2_node
+                    l1 = entry.get("l1", "")
+                    if l1 and tax_name:
+                        add_l2_node(tax_name, l1, label)
+                except Exception:
+                    pass
+                approve_candidate(label)
+                st.success(f"已通过「{label}」")
+                st.rerun()
+        with c3:
+            if st.button("❌", key=f"{TAX_KEY}reject_{label}", help=f"拒绝 {label}"):
+                reject_candidate(label)
+                st.success(f"已拒绝「{label}」")
+                st.rerun()
+
+    # Show approved/rejected lists (collapsed)
+    if approved:
+        with st.expander(f"已通过 ({len(approved)})", expanded=False):
+            for e in approved:
+                st.caption(f"✅ {e.get('label', '?')} — {e.get('category', '?')}")
+    if rejected:
+        with st.expander(f"已拒绝 ({len(rejected)})", expanded=False):
+            for e in rejected:
+                st.caption(f"❌ {e.get('label', '?')} — {e.get('category', '?')}")
+
+
 def render_tab_knowledge():
     """Render the merged knowledge base + admin AI tab."""
     st.subheader("📚 知识库")
@@ -303,6 +487,22 @@ def render_tab_knowledge():
             st.rerun()
 
     with right_col:
+        # ── Taxonomy management toggle ────────────────────────────────
+        col_t, col_a = st.columns([1, 3])
+        with col_t:
+            if "show_taxonomy_panel" not in st.session_state:
+                st.session_state.show_taxonomy_panel = False
+            if st.button(
+                "🏷️ 词表管理" if not st.session_state.show_taxonomy_panel else "📄 返回浏览",
+                key=f"{KB_KEY}toggle_taxonomy", use_container_width=True,
+            ):
+                st.session_state.show_taxonomy_panel = not st.session_state.show_taxonomy_panel
+                st.rerun()
+
+        if st.session_state.show_taxonomy_panel:
+            _render_taxonomy_panel()
+            return
+
         # ── Top: 管理员AI dialog ──────────────────────────────────────
         with st.container():
             st.markdown("**🤖 管理员AI**")

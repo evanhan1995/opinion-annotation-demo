@@ -348,6 +348,132 @@ def _is_rejected(label: str, taxonomy_type: str) -> bool:
     return False
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Taxonomy file write-back (Markdown in-place editing)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _serialize_taxonomy_nodes(nodes: list[TaxonomyNode], is_flat: bool) -> str:
+    """Serialize taxonomy nodes back to Markdown body."""
+    field_name = "标签" if is_flat else "子类"
+    lines = []
+    for l1 in nodes:
+        lines.append(f"## {l1.name}")
+        if l1.description:
+            lines.append(f"- **定义**: {l1.description}")
+        if l1.children:
+            lines.append(f"- **{field_name}**:")
+            for l2 in l1.children:
+                if is_flat:
+                    if l2.description:
+                        lines.append(f"  - {l2.name}: {l2.description}")
+                    else:
+                        lines.append(f"  - {l2.name}")
+                else:
+                    if l2.keywords:
+                        kw_str = ", ".join(l2.keywords)
+                        lines.append(f"  - {l2.name} ({kw_str})")
+                    else:
+                        lines.append(f"  - {l2.name}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _rebuild_taxonomy_file(filepath: Path, nodes: list[TaxonomyNode], is_flat: bool) -> None:
+    """Rebuild a taxonomy .md file: preserve frontmatter + comments, replace body."""
+    original = filepath.read_text(encoding="utf-8")
+    # Extract frontmatter
+    fm = ""
+    body_start = 0
+    if original.startswith("---"):
+        parts = original.split("---", 2)
+        if len(parts) >= 3:
+            fm = parts[1]
+            body_start = len(parts[0]) + len(parts[1]) + 6  # "---" + fm + "---"
+    # Extract HTML comment block (if any) after frontmatter
+    after_fm = original[body_start:].lstrip()
+    comment_block = ""
+    if after_fm.startswith("<!--"):
+        end = after_fm.find("-->\n")
+        if end != -1:
+            comment_block = after_fm[:end + 4]  # include closing -->
+    # Rebuild
+    new_body = _serialize_taxonomy_nodes(nodes, is_flat)
+    new_text = f"---\n{fm}---\n\n"
+    if comment_block:
+        new_text += comment_block + "\n\n"
+    new_text += "# " + filepath.stem.replace("_", " ").title() + "\n\n"
+    new_text += new_body
+    filepath.write_text(new_text, encoding="utf-8")
+
+
+def add_l2_node(taxonomy_name: str, l1_name: str, l2_name: str,
+                keywords: list = None, description: str = "") -> bool:
+    """Add a new L2 child node under an L1 category. Returns True on success."""
+    tax = load_taxonomy(taxonomy_name)
+    is_flat = tax.taxonomy_type != "narrative_category"
+    for l1 in tax.nodes:
+        if l1.name == l1_name:
+            for existing in l1.children:
+                if existing.name == l2_name:
+                    return False  # already exists
+            l1.children.append(TaxonomyNode(
+                name=l2_name, keywords=keywords or [],
+                description=description, parent=l1_name,
+            ))
+            filepath = TAXONOMY_DIR / f"{taxonomy_name}.md"
+            _rebuild_taxonomy_file(filepath, tax.nodes, is_flat)
+            _reload_cache(taxonomy_name)
+            return True
+    return False  # L1 not found
+
+
+def remove_l2_node(taxonomy_name: str, l1_name: str, l2_name: str) -> bool:
+    """Remove an L2 child node from an L1 category. Returns True on success."""
+    tax = load_taxonomy(taxonomy_name)
+    is_flat = tax.taxonomy_type != "narrative_category"
+    for l1 in tax.nodes:
+        if l1.name == l1_name:
+            for i, child in enumerate(l1.children):
+                if child.name == l2_name:
+                    l1.children.pop(i)
+                    filepath = TAXONOMY_DIR / f"{taxonomy_name}.md"
+                    _rebuild_taxonomy_file(filepath, tax.nodes, is_flat)
+                    _reload_cache(taxonomy_name)
+                    return True
+    return False
+
+
+def add_l1_node(taxonomy_name: str, l1_name: str,
+                description: str = "") -> bool:
+    """Add a new L1 category to a taxonomy. Returns True on success."""
+    tax = load_taxonomy(taxonomy_name)
+    is_flat = tax.taxonomy_type != "narrative_category"
+    for existing in tax.nodes:
+        if existing.name == l1_name:
+            return False
+    tax.nodes.append(TaxonomyNode(name=l1_name, description=description))
+    filepath = TAXONOMY_DIR / f"{taxonomy_name}.md"
+    _rebuild_taxonomy_file(filepath, tax.nodes, is_flat)
+    _reload_cache(taxonomy_name)
+    return True
+
+
+# Simple in-memory cache for taxonomy loads (bust on write)
+_taxonomy_cache: dict[str, Taxonomy] = {}
+
+
+def _reload_cache(taxonomy_name: str) -> None:
+    """Clear cached taxonomy so next load_taxonomy reads fresh file."""
+    _taxonomy_cache.pop(taxonomy_name, None)
+
+
+def load_taxonomy_cached(filename: str) -> Taxonomy:
+    """Cached version of load_taxonomy — avoids re-parsing on repeated UI renders."""
+    if filename not in _taxonomy_cache:
+        _taxonomy_cache[filename] = load_taxonomy(filename)
+    return _taxonomy_cache[filename]
+
+
 def approve_candidate(label: str) -> bool:
     """Move a candidate from pending → approved."""
     data = _load_candidates()
