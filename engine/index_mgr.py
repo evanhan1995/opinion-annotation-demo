@@ -61,8 +61,8 @@ _DIMENSION_HEADERS = {
     "platform": ["平台", "案例"],
 }
 
-_OVERVIEW_HEADERS_AUTO = ["案例", "标题", "严重度", "分流建议", "平台", "风险标签"]
-_OVERVIEW_HEADERS_CORRECTION = ["案例", "标题", "严重度", "分流建议", "平台", "类型", "日期"]
+_OVERVIEW_HEADERS_AUTO = ["案例", "标题", "严重度", "分流建议", "平台", "叙事分类", "风险标签"]
+_OVERVIEW_HEADERS_CORRECTION = ["案例", "标题", "严重度", "分流建议", "平台", "叙事分类", "类型", "日期"]
 
 
 def _is_table_row(line: str) -> bool:
@@ -169,6 +169,7 @@ def update_case_index(
     tags: list = None,
     categories: list = None,
     source: str = "auto_ingest",
+    narrative_thread: str = "",
 ) -> None:
     """Add new case to wiki/cases/index.md overview table + all dimension indexes.
 
@@ -207,6 +208,7 @@ def update_case_index(
             "严重度": severity,
             "分流建议": action,
             "平台": "—",
+            "叙事分类": narrative_thread or "—",
             "类型": "纠偏案例",
             "日期": today,
         }
@@ -219,6 +221,7 @@ def update_case_index(
             "严重度": severity,
             "分流建议": action,
             "平台": platform,
+            "叙事分类": narrative_thread or "—",
             "风险标签": tags_str,
         }
 
@@ -248,6 +251,8 @@ def update_case_index(
             section = "platform"
         elif s.startswith("### 按分类"):
             section = "category"
+        elif s.startswith("### 按叙事"):
+            section = "narrative"
         elif s.startswith("## "):
             section = None
 
@@ -260,6 +265,11 @@ def update_case_index(
         elif section == "category":
             for cat in (categories or []):
                 new_lines[i] = _upsert_dimension_row(line, cat, case_ref)
+        elif section == "narrative":
+            # narrative_thread is "L1/L2", use L1 for dimension index
+            n_l1 = narrative_thread.split("/")[0] if narrative_thread else ""
+            if n_l1:
+                new_lines[i] = _upsert_dimension_row(line, n_l1, case_ref)
 
     with open(INDEX_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines))
