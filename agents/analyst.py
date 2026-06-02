@@ -70,19 +70,37 @@ def _engine_result_to_annotation(result: dict, url: str, platform: str,
     else:
         category_str = str(categories)
 
+    # Phase 1: controlled vocabulary fields from LLM output
+    narrative = result.get("叙事分类", "") or ""
+    secondary = result.get("次要叙事", []) or []
+    tags_controlled = result.get("风险标签_受控", []) or []
+    tags_candidate = result.get("风险标签_候选", []) or []
+    target = result.get("目标类型", "我方") or "我方"
+
+    # Fallback: if LLM returned old-format keys, merge them
+    if not tags_controlled and result.get("风险标签"):
+        tags_controlled = result.get("风险标签", [])
+    if not narrative and result.get("category"):
+        narrative = result.get("category", "")
+
     return Annotation(
         url=url,
         platform=platform,
         severity=result.get("严重度", "P3"),
         severity_reason=result.get("严重度理由", ""),
         sentiment=result.get("情感", "中性"),
-        risk_tags=result.get("风险标签", []),
+        risk_tags=tags_controlled,
         triage=result.get("分流建议", "内部研判"),
         comment_risk=risk_light,
         category=category_str,
         relevance="relevant",
         relevance_reason="",
         summary=result.get("摘要", "") or "",
+        narrative_thread=narrative,
+        secondary_threads=secondary if isinstance(secondary, list) else [secondary],
+        risk_tags_controlled=tags_controlled,
+        risk_tags_candidate=tags_candidate,
+        target_type=target,
     )
 
 

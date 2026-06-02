@@ -174,6 +174,20 @@ class Annotation:
     relevance: str = "relevant"  # relevant | irrelevant_{keyword}_{platform}
     relevance_reason: str = ""
     summary: str = ""
+    # Phase 1 controlled vocabulary fields
+    narrative_thread: str = ""       # 叙事分类 L1/L2
+    secondary_threads: list[str] = None  # 次要叙事
+    risk_tags_controlled: list[str] = None  # 受控风险标签
+    risk_tags_candidate: list[str] = None   # 候选风险标签
+    target_type: str = "我方"  # 目标类型: 我方/竞品/行业
+
+    def __post_init__(self):
+        if self.secondary_threads is None:
+            self.secondary_threads = []
+        if self.risk_tags_controlled is None:
+            self.risk_tags_controlled = []
+        if self.risk_tags_candidate is None:
+            self.risk_tags_candidate = []
 
 
 @dataclass
@@ -318,7 +332,7 @@ def annotation_to_engine_dict(ann: Annotation) -> dict:
 
     Single source of truth — used by Curator and Ingestor.
     """
-    return {
+    result = {
         "严重度评级": ann.severity,
         "严重度理由": ann.severity_reason,
         "情感分析": {"整体情感": ann.sentiment},
@@ -330,3 +344,16 @@ def annotation_to_engine_dict(ann: Annotation) -> dict:
         "舆情分类": ann.category.split("|") if ann.category else [],
         "摘要": ann.summary,
     }
+    # Phase 1 controlled vocabulary — only include when non-empty so
+    # ingestor fallback logic (get("风险标签_受控", tags)) still works.
+    if ann.narrative_thread:
+        result["叙事分类"] = ann.narrative_thread
+    if ann.secondary_threads:
+        result["次要叙事"] = ann.secondary_threads
+    if ann.risk_tags_controlled:
+        result["风险标签_受控"] = ann.risk_tags_controlled
+    if ann.risk_tags_candidate:
+        result["风险标签_候选"] = ann.risk_tags_candidate
+    if ann.target_type and ann.target_type != "我方":
+        result["目标类型"] = ann.target_type
+    return result
