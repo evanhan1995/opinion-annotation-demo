@@ -31,6 +31,13 @@ PROJECT_DIR = ENGINE_DIR.parent
 WIKI_DIR = PROJECT_DIR / "wiki"
 CONFIG_PATH = ENGINE_DIR / "config.json"
 
+# Phase 1: controlled vocabulary
+try:
+    from engine.taxonomy_mgr import load_taxonomy, build_taxonomy_prompt_section
+    _TAXONOMY_AVAILABLE = True
+except Exception:
+    _TAXONOMY_AVAILABLE = False
+
 # Module-level file cache: wiki pages are read once per session
 # and don't change during a single pipeline run.
 _FILE_CACHE: dict[str, str] = {}
@@ -125,9 +132,17 @@ PLATFORM_LIST = [
     "Reddit", "新闻媒体", "论坛", "其他", "B站", "微博", "微信公众号", "抖音"
 ]
 
-CATEGORY_OPTIONS = [
-    "商品问题", "商品侵权问题", "售后问题", "数据泄露", "软件问题", "其他"
-]
+def _get_category_options() -> list[str]:
+    """Load category options from taxonomy, with fallback to hardcoded list."""
+    try:
+        from engine.taxonomy_mgr import load_taxonomy
+        nt = load_taxonomy("narrative_categories")
+        return nt.flat_labels()
+    except Exception:
+        return ["商品问题", "商品侵权问题", "售后问题", "数据泄露", "软件问题", "其他"]
+
+
+CATEGORY_OPTIONS = _get_category_options()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 工具函数
@@ -256,7 +271,7 @@ def build_system_prompt(user_content: str = "") -> tuple[str, dict]:
     # 组装角色指令
     role_instruction = """你是资深舆情分析师。对每一条输入的舆情内容，严格遵循下方的标注规范和案例库完成：
 
-1. 舆情分类(可多选: 商品问题/商品侵权问题/售后问题/数据泄露/软件问题/其他) → 2. 多维度情感分析 → 3. 严重度评级(P0-P3) → 4. 分流建议 → 5. 真实性评估 → 6. 摘要+风险标签 → 7. 评论区分析（如有评论数据）
+1. 叙事分类 → 从受控词表中选择主分类(L1/L2格式) → 2. 舆情分类 → 3. 多维度情感分析 → 4. 严重度评级(P0-P3) → 5. 分流建议 → 6. 真实性评估 → 7. 风险标签(从受控词表选，最多3个) → 8. 摘要 → 9. 评论区分析（如有评论数据）
 
 核心原则：
 - 宁可误报，不可漏报——对高敏内容保持低阈值
@@ -264,6 +279,7 @@ def build_system_prompt(user_content: str = "") -> tuple[str, dict]:
 - 不确定时升一级——P1/P2 边界模糊时，按 P1 处理
 - 规则来自案例——当遇到规则未覆盖的情况时，寻找最相似已有案例
 - P0红线优先标注——识别到红线先标P0，再补全其余字段
+- 标签从词表选——叙事分类和风险标签必须从下方受控词表中选择；找不到合适标签时在 risk_tags_candidate 中建议新标签
 
 ## 评论区分析（如有评论数据）
 
@@ -323,6 +339,16 @@ def build_system_prompt(user_content: str = "") -> tuple[str, dict]:
 
 # 案例库（校准基准）
 {case_pages}"""
+
+    # Inject controlled vocabulary taxonomy (Phase 1)
+    if _TAXONOMY_AVAILABLE:
+        try:
+            nt = load_taxonomy("narrative_categories")
+            rt = load_taxonomy("risk_tags")
+            taxonomy_section = build_taxonomy_prompt_section(nt, rt)
+            full_prompt = full_prompt + "\n\n---\n\n" + taxonomy_section
+        except Exception:
+            pass
 
     stats["total_chars"] = len(full_prompt)
     stats["total_estimated_tokens"] = estimate_tokens(full_prompt)
