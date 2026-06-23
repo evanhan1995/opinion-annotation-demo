@@ -23,7 +23,6 @@ import random
 import re
 import sys
 import time
-from concurrent import futures
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -53,7 +52,7 @@ if sys.stdout and hasattr(sys.stdout, "buffer"):
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-from agents.shared import PROJECT_ROOT, RAW_DIR, OUTPUTS_DIR
+from agents.shared import PROJECT_ROOT, RAW_DIR, OUTPUTS_DIR, call_with_timeout
 from engine.ratelimit import get_limiter
 
 
@@ -863,17 +862,10 @@ def _search_with_timeout(searcher, keyword: str, sort_type: str, count: int,
     even with socket_timeout set.  This wraps each call in a future so we
     can enforce a wall-clock deadline.
     """
-    executor = futures.ThreadPoolExecutor(max_workers=1)
-    try:
-        fut = executor.submit(searcher, keyword, sort_type, count, date_from, date_to)
-        try:
-            return fut.result(timeout=_SEARCH_TIMEOUT)
-        except futures.TimeoutError:
-            return []
-        except Exception:
-            return []
-    finally:
-        executor.shutdown(wait=False)
+    result, err = call_with_timeout(searcher, _SEARCH_TIMEOUT, keyword, sort_type, count, date_from, date_to)
+    if err:
+        return []
+    return result if isinstance(result, list) else []
 
 
 # ── Deduplication ──────────────────────────────────────────────────────

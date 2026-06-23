@@ -31,9 +31,9 @@ def render_tab4():
     overdue_cases = []
     now = _dt.now()
     for c in all_cases:
-        if c["status"] == "待跟进" and c.get("assigned_date"):
+        if c["status"] == "待跟进" and c.get("ingested_at"):
             try:
-                assigned = _dt.strptime(c["assigned_date"][:10], "%Y-%m-%d")
+                assigned = _dt.strptime(c["ingested_at"][:10], "%Y-%m-%d")
                 if (now - assigned).total_seconds() > 86400:
                     overdue_cases.append(c)
             except ValueError:

@@ -43,3 +43,7 @@ engine/.xhs_dl_cache/
 *.tmp.*
 *.png
 *.jpg
+# Secret files
+engine/config.local.json
+# Temp files from IDE/VibeCoding
+*.tmp

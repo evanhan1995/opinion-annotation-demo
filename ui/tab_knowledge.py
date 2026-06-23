@@ -452,6 +452,49 @@ def _render_candidate_manager():
                 st.caption(f"❌ {e.get('label', '?')} — {e.get('category', '?')}")
 
 
+def _render_search_results(query: str):
+    """Render semantic search results in the left navigation column."""
+    if not query:
+        return
+
+    results = _run_search(query)
+    if not results:
+        st.caption(f"未找到与「{query}」相关的内容")
+        st.caption("试试其他关键词，或返回分类浏览")
+        return
+
+    st.caption(f"搜索「{query}」— {len(results)} 个结果")
+    for r in results:
+        title = r.get("title", "?")[:35]
+        path = r.get("path", "")
+        score = r.get("score", 0)
+        pct = min(100, max(0, score))
+        label = f"> {title}"
+        if pct >= 70:
+            label += f"  [{pct}%]"
+        is_sel = st.session_state.get("_selected_page") == path
+        btn_label = f"**>> {title}**" if is_sel else label
+        if st.button(btn_label, key=f"{KB_KEY}search_{path}", use_container_width=True):
+            st.session_state._selected_page = path
+            st.rerun()
+
+
+def _run_search(query: str) -> list[dict]:
+    """Run semantic or bigram search and return enriched results."""
+    try:
+        from engine.agent import _embedding_search
+        results = _embedding_search(query, max_results=20)
+        if results is not None:
+            return results
+    except Exception:
+        pass
+    try:
+        from engine.agent import _bigram_search
+        return _bigram_search(query, max_results=20)
+    except Exception:
+        return []
+
+
 def render_tab_knowledge():
     """Render the merged knowledge base + admin AI tab."""
     st.subheader("📚 知识库")
@@ -476,8 +519,33 @@ def render_tab_knowledge():
     left_col, right_col = st.columns([1, 3])
 
     with left_col:
-        st.markdown("**分类导航**")
-        selected = _render_kb_nav(pages)
+        # Phase 2: semantic search bar
+        search_mode = st.session_state.get(f"{KB_KEY}search_mode", False)
+
+        # Pending clear: must happen BEFORE widget instantiation
+        if st.session_state.pop(f"{KB_KEY}_pending_clear", False):
+            st.session_state[f"{KB_KEY}search_input"] = ""
+            st.session_state[f"{KB_KEY}search_mode"] = False
+            search_mode = False
+
+        search_query = st.text_input(
+            "搜索知识库",
+            key=f"{KB_KEY}search_input",
+            placeholder="输入关键词搜索...",
+            label_visibility="collapsed",
+        )
+        if search_query:
+            search_mode = True
+            st.session_state[f"{KB_KEY}search_mode"] = True
+
+        if search_mode:
+            if st.button("← 返回分类浏览", key=f"{KB_KEY}clear_search", use_container_width=True):
+                st.session_state[f"{KB_KEY}_pending_clear"] = True
+                st.rerun()
+            _render_search_results(search_query)
+        else:
+            st.markdown("**分类导航**")
+            selected = _render_kb_nav(pages)
 
         st.divider()
         if has_password and st.button("🔒 锁定知识库", key=f"{KB_KEY}lock", use_container_width=True):

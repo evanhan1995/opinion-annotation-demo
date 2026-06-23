@@ -100,17 +100,37 @@ def _score_case_file(filepath: Path, tokens: list[str]) -> int:
 
 
 def _get_relevant_case_layers(user_content: str) -> list[tuple[str, str]]:
-    """Select top cases by content relevance instead of recency."""
+    """Select top cases by content relevance (embedding or keyword)."""
     cases_dir = WIKI_DIR / "cases"
     if not cases_dir.exists() or not user_content:
         return []
 
+    # Phase 2: try embedding-based semantic search first
+    try:
+        from engine.embeddings import EmbeddingService
+        svc = EmbeddingService()
+        if svc.case_count > 0:
+            results = svc.hybrid_search(user_content, top_k=MAX_CASE_LAYERS)
+            layers = []
+            for r in results:
+                p = Path(r["path"])
+                try:
+                    rel = p.relative_to(WIKI_DIR)
+                except ValueError:
+                    rel = p
+                layers.append(("case", str(rel).replace("\\", "/")))
+            if layers:
+                return layers
+    except Exception:
+        pass
+
+    # Fallback: keyword token scoring
     tokens = _tokenize_for_search(user_content)
     if not tokens:
         return []
 
     scored = []
-    for f in cases_dir.glob("case-*.md"):
+    for f in cases_dir.rglob("*.md"):
         s = _score_case_file(f, tokens)
         if s > 0:
             scored.append((s, f))
@@ -231,7 +251,7 @@ def load_config():
         "api_style": defaults["api_style"],
         "max_tokens": file_config.get("max_tokens", 4096),
         "temperature": file_config.get("temperature", 0.1),
-        "kb_password": file_config.get("kb_password", ""),
+        "kb_password": os.environ.get("KB_PASSWORD", file_config.get("kb_password", "")),
     }
 
     return config
@@ -847,13 +867,47 @@ def diff_annotations(old: dict, new: dict) -> list[dict]:
 
 
 def find_similar_cases(tags: list[str], top_k: int = 3) -> list[dict]:
-    """Scan wiki/cases/ for cases with tag overlap. Returns top_k matches sorted by hits."""
+    """Find similar cases by embedding similarity, falling back to tag overlap.
+
+    Returns top_k matches sorted by relevance.
+    """
     cases_dir = WIKI_DIR / "cases"
     if not cases_dir.exists() or not tags:
         return []
+
+    # Phase 2: try embedding-based semantic similarity first
+    try:
+        from engine.embeddings import EmbeddingService
+        svc = EmbeddingService()
+        if svc.case_count > 0:
+            query = " ".join(tags)
+            results = svc.hybrid_search(query, top_k=top_k)
+            scored = []
+            for r in results:
+                p = Path(r["path"])
+                try:
+                    text = p.read_text(encoding="utf-8")
+                    parts = text.split("---", 2)
+                    fm = parts[1] if len(parts) >= 3 else ""
+                    title_m = re.search(r'title:\s*(.+)', fm)
+                    sev_m = re.search(r'severity:\s*(\S+)', fm)
+                    scored.append({
+                        "filename": p.name,
+                        "title": title_m.group(1).strip() if title_m else p.stem,
+                        "severity": sev_m.group(1) if sev_m else "?",
+                        "hits": int(r["score"] * 10),
+                    })
+                except Exception:
+                    continue
+            if scored:
+                return scored[:top_k]
+    except Exception:
+        pass
+
+    # Fallback: tag-overlap search
     tags_lower = [t.lower() for t in tags]
     scored = []
-    for f in sorted(cases_dir.glob("case-*.md")):
+    for f in sorted(cases_dir.rglob("*.md")):
         try:
             text = f.read_text(encoding="utf-8")
             parts = text.split("---", 2)

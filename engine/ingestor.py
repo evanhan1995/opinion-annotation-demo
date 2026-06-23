@@ -125,6 +125,7 @@ def ingest(
     url: str = "",
     notes: str = "",
     init_status: str = "待跟进",
+    keyword: str = "",
 ) -> dict:
     """Auto-ingest: generate case from annotation if URL is new.
 
@@ -148,7 +149,8 @@ def ingest(
     platform = scraped_data.get("来源平台", "未知")
     author_file = _upsert_author(social, platform) if social else None
     case_file = _generate_auto_case(scraped_data, annotation_result, url, author_file,
-                                     notes=notes, init_status=init_status)
+                                     notes=notes, init_status=init_status,
+                                     keyword=keyword)
     _update_case_index(case_file, annotation_result, scraped_data)
     _update_global_index(case_file, annotation_result)
     _append_ingest_log(case_file, annotation_result, url)
@@ -162,12 +164,26 @@ def ingest(
     except Exception:
         pass
 
+    # Phase 2: generate embedding for semantic search (non-blocking)
+    similar_cases = []
+    try:
+        from engine.embeddings import EmbeddingService
+        svc = EmbeddingService()
+        case_path = _get_case_dir(platform) / case_file
+        svc.get_or_create_embedding(str(case_path))
+        similar = svc.find_similar_cases(str(case_path), top_k=3)
+        for s in similar:
+            similar_cases.append({"path": s["path"], "score": s["score"]})
+    except Exception:
+        pass
+
     return {
         "action": "case_generated",
         "case_file": case_file,
         "boundary_check": boundary,
         "boundary_suggestions": boundary_suggestions,
         "linker": linker_result or {},
+        "similar_cases": similar_cases,
     }
 
 
@@ -382,6 +398,7 @@ def _generate_auto_case(
     author_file: str = None,
     notes: str = "",
     init_status: str = "待跟进",
+    keyword: str = "",
 ) -> str:
     """Generate auto-ingest case page. Returns filename (e.g. 'case-008.md')."""
     case_id = get_next_case_id()
@@ -423,6 +440,7 @@ def _generate_auto_case(
         boundary_lines.append("- 此案例落在现有规则覆盖范围内，无明显边界异常。")
 
     url_line = f"url: {url}" if url else ""
+    kw_line = f"source_keyword: {keyword}" if keyword else ""
     cats = annotation_result.get("舆情分类", [])
     cat_line = f"categories: [{', '.join(cats)}]" if cats else ""
     author_line = f"author: \"[[authors/{author_file}]]\"" if author_file else ""
@@ -445,6 +463,7 @@ platform: {platform}
 source: auto_ingest
 status: {init_status}
 {url_line}
+{kw_line}
 {cat_line}
 {author_line}
 {nt_line}

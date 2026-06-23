@@ -20,6 +20,7 @@ Model: DeepSeek (Q&A search) + template-based case generation (no LLM needed).
 """
 import io
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -121,7 +122,7 @@ def _build_case_body(raw: RawData, annotation: Annotation, notes: str = "",
 
 
 def ingest(raw: RawData, annotation: Annotation, notes: str = "",
-           init_status: str = "待跟进") -> KBEntry:
+           init_status: str = "待跟进", keyword: str = "") -> KBEntry:
     """Ingest a case into the knowledge base.
 
     Phase 2: delegates to engine/ingestor.py for full pipeline (dedup, index, author lib, archive).
@@ -136,7 +137,8 @@ def ingest(raw: RawData, annotation: Annotation, notes: str = "",
         engine_scraped = rawdata_to_engine_dict(raw)
         engine_annotation = annotation_to_engine_dict(annotation)
         result = engine_ingest(engine_scraped, engine_annotation, raw.url,
-                               notes=notes, init_status=init_status)
+                               notes=notes, init_status=init_status,
+                               keyword=keyword)
         case_file = result.get("case_file", "")
         case_id = case_file.replace(".md", "") if case_file else _generate_case_id()
         case_path = CASES_DIR / case_file if case_file else CASES_DIR / f"{case_id}.md"
@@ -192,7 +194,7 @@ def update_case_status(case_id: str, new_status: str, notes: str = "") -> dict:
 
     fm = parts[1]
     old_status = ""
-    if m := __import__("re").search(r"^status:\s*(.+)$", fm, __import__("re").MULTILINE):
+    if m := re.search(r"^status:\s*(.+)$", fm, re.MULTILINE):
         old_status = m.group(1).strip()
 
     # Update status in frontmatter

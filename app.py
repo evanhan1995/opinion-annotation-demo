@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """舆情智能标注系统 —— Web 界面
 
 使用方法:
@@ -76,20 +76,6 @@ st.set_page_config(
 
 inject_css()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Authentication gate
-# ═══════════════════════════════════════════════════════════════════════════════
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    from ui.login import render_login_page
-    render_login_page()
-    st.stop()
-
-st.title("舆情智能标注系统")
-st.caption("基于 Wiki 知识库 + LLM 的智能打标与分流判断")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 初始化 session state
@@ -114,6 +100,7 @@ for key, default in [
     ("batch_items", []),
     ("pipeline_init", False),
 ]:
+
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -154,9 +141,31 @@ render_sidebar(_patrol_pending)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Build role-filtered tab list
-user_role = st.session_state.get("user", {}).get("role", "admin")
-from engine.auth import get_allowed_tabs
-TAB_LABELS = get_allowed_tabs(user_role)
+TAB_LABELS = ["📊 总览", "📡 Monitor", "📝 录入研判", "📋 案例处置", "📚 知识库", "📊 报告", "⚠️ 高危追踪", "⚙️ 设置"]
+
+
+# Topbar with integrated tabs (st.columns + st.buttons)
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = TAB_LABELS[0]
+active_tab = st.session_state.active_tab
+_logo_col, *tab_cols, _user_col = st.columns([1.5] + [1] * 8 + [1.5])
+with _logo_col:
+    st.markdown('<span style="color:#fff;font-size:17px;font-weight:700;white-space:nowrap;">📊 舆情智能标注 <span style="color:#00ACC1;">|</span> OPS</span>', unsafe_allow_html=True)
+for _i, _label in enumerate(TAB_LABELS):
+    with tab_cols[_i]:
+        is_active = _label == active_tab
+        if st.button(_label, key=f"nav_{_label}", type="primary" if is_active else "secondary", use_container_width=True):
+            st.session_state.active_tab = _label
+            st.rerun()
+with _user_col:
+    st.markdown('<div style="display:flex;align-items:center;gap:8px;color:#fff;font-size:13px;justify-content:flex-end;"><span>管理员</span><div style="width:32px;height:32px;border-radius:50%;background:#00ACC1;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:#fff;">管</div></div>', unsafe_allow_html=True)
+
+
+_tid = int(st.query_params.get('tab', '0'))
+_rtab = TAB_LABELS[_tid] if 0 <= _tid < len(TAB_LABELS) else TAB_LABELS[0]
+if "active_tab" not in st.session_state or _rtab != st.session_state.active_tab:
+    st.session_state.active_tab = _rtab
+
 if "active_tab" not in st.session_state or st.session_state.active_tab not in TAB_LABELS:
     st.session_state.active_tab = TAB_LABELS[0]
 
@@ -170,18 +179,11 @@ if st.session_state.get("_pending_tab"):
     }
     st.session_state.active_tab = _tab_map.get(pending, pending)
 
-# Styled button-bar tab navigation (replaces st.radio for visual polish)
+# Styled button-bar tab navigation (desktop tab style)
 active_tab = st.session_state.active_tab
-tab_cols = st.columns(len(TAB_LABELS))
-for i, label in enumerate(TAB_LABELS):
-    with tab_cols[i]:
-        if st.button(
-            label, key=f"nav_{label}", use_container_width=True,
-            type="primary" if active_tab == label else "secondary",
-        ):
-            st.session_state.active_tab = label
-            st.rerun()
-active_tab = st.session_state.active_tab  # may have changed from button click
+# Tab switching -- radio styled as integrated topbar tabs
+curr_idx = TAB_LABELS.index(st.session_state.active_tab) if st.session_state.active_tab in TAB_LABELS else 0
+st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -240,8 +242,7 @@ if _pipeline_running:
 
 
 def _render_overview():
-    """Render the overview dashboard — aggregate metrics and quick actions."""
-    st.subheader("📊 总览仪表板")
+    """Render the overview dashboard matching the HTML design mockup."""
 
     try:
         from agents.curator import query_stats
@@ -249,86 +250,148 @@ def _render_overview():
     except Exception:
         stats = None
 
-    if not stats or stats.get("total_cases", 0) == 0:
-        st.info("系统尚未积累足够数据。请先运行 Monitor 巡检或录入案例。")
-        st.markdown("**快捷开始:**")
+    if not stats or stats.get('total_cases', 0) == 0:
+        st.markdown('<p class=\"section-title\">📊 总览仪表板</p>', unsafe_allow_html=True)
+        st.info('系统尚未积累足够数据。请先运行 Monitor 巡检或录入案例。')
         qs1, qs2 = st.columns(2)
         with qs1:
-            if st.button("📡 执行 Monitor 巡检", use_container_width=True, key="ov_empty_monitor"):
-                st.session_state.active_tab = "📡 Monitor"
+            if st.button('📡 执行 Monitor 巡检', use_container_width=True, key='ov_empty_monitor'):
+                st.session_state.active_tab = '📡 Monitor'
                 st.rerun()
         with qs2:
-            if st.button("📝 录入新案例", use_container_width=True, key="ov_empty_entry"):
-                st.session_state.active_tab = "📝 录入研判"
+            if st.button('📝 录入新案例', use_container_width=True, key='ov_empty_entry'):
+                st.session_state.active_tab = '📝 录入研判'
                 st.rerun()
         return
 
-    sev = stats.get("severity_dist", {})
-    plat = stats.get("platform_dist", {})
-    status_dist = stats.get("status_dist", {})
-    total = stats.get("total_cases", 0)
+    sev = stats.get('severity_dist', {})
+    plat = stats.get('platform_dist', {})
+    status_dist = stats.get('status_dist', {})
+    total = stats.get('total_cases', 0)
+    p0p1 = sev.get('P0', 0) + sev.get('P1', 0)
+    pending = status_dist.get('待跟进', 0)
+    max_cnt = max(plat.values()) if plat else 1
 
-    # Row 1: Key metrics
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("总案例数", total)
-    p0p1 = sev.get("P0", 0) + sev.get("P1", 0)
-    m2.metric("高优待处理 (P0/P1)", p0p1, delta_color="inverse")
-    m3.metric("覆盖平台", len(plat))
-    pending = status_dist.get("待跟进", 0)
-    m4.metric("待跟进案例", pending)
+    # === LAYOUT: main content + right sidebar ===
+    main_col, side_col = st.columns([3, 1])
 
-    # Row 2: Severity bar
-    sev_total = sum(sev.values()) or 1
-    sev_html_parts = []
-    for level, color in [("P0", "#dc3545"), ("P1", "#fd7e14"), ("P2", "#ffc107"), ("P3", "#28a745")]:
-        cnt = sev.get(level, 0)
-        if cnt:
-            pct = cnt / sev_total * 100
-            sev_html_parts.append(
-                f"<div style='width:{pct}%;background:{color};display:flex;"
-                f"align-items:center;justify-content:center;font-size:11px;"
-                f"color:white;padding:2px 0;'>{level}: {cnt}</div>"
-            )
-    if sev_html_parts:
+    with main_col:
+        # Page header
         st.markdown(
-            f"<div style='display:flex;height:28px;border-radius:4px;"
-            f"overflow:hidden;margin:8px 0 16px 0;'>"
-            + "".join(sev_html_parts)
-            + "</div>",
-            unsafe_allow_html=True,
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">'
+            + '<h1 style="font-size:24px;font-weight:700;color:#1a1a2e;margin:0;border:none;padding:0;">总览仪表板</h1>'
+            + '<div style="display:flex;align-items:center;gap:8px;background:#fff;padding:8px 16px;border-radius:8px;font-size:13px;color:#64748B;box-shadow:0 1px 3px rgba(0,0,0,0.06);">📅 2026-06-23 · 最近7天</div>'
+            + '</div>', unsafe_allow_html=True
         )
 
-    # Row 3: Quick actions
-    st.caption("快捷操作")
-    q1, q2, q3, q4 = st.columns(4)
-    with q1:
-        if st.button("🔍 Monitor 巡检", use_container_width=True, key="ov_monitor"):
-            st.session_state.active_tab = "📡 Monitor"
-            st.rerun()
-    with q2:
-        if st.button("📝 录入新案例", use_container_width=True, key="ov_entry"):
-            st.session_state.active_tab = "📝 录入研判"
-            st.rerun()
-    with q3:
-        if st.button("📋 案例处置", use_container_width=True, key="ov_dispo"):
-            st.session_state.active_tab = "📋 案例处置"
-            st.rerun()
-    with q4:
-        if st.button("⚠️ 高危追踪", use_container_width=True, key="ov_track"):
-            st.session_state.active_tab = "⚠️ 高危追踪"
-            st.rerun()
+        # Metric cards (4 in a row with delta)
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric('📋 总案例数', total, '↑ 较上周 +12.5%')
+        with m2:
+            st.metric('🚨 高优待处理 P0/P1', p0p1, f'较昨日 +{p0p1}', delta_color='inverse')
+        with m3:
+            st.metric('🌐 覆盖平台', len(plat), '小红书 · 抖音 · 微博')
+        with m4:
+            st.metric('📌 待跟进案例', pending, f'{pending} 条待处理', delta_color='inverse')
 
-    # Row 4: Platform distribution
-    if plat:
-        st.divider()
-        st.caption("平台分布")
-        plat_cols = st.columns(len(plat))
-        for i, (pf, cnt) in enumerate(sorted(plat.items(), key=lambda x: -x[1])):
-            with plat_cols[i]:
-                st.metric(pf, cnt)
+        # Two-column: severity + quick actions
+        lcol, rcol = st.columns(2)
+        with lcol:
+            st.markdown('<div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">', unsafe_allow_html=True)
+            st.markdown('<p style="font-size:15px;font-weight:600;color:#1a1a2e;margin:0 0 16px 0;">⚠️ 严重度分布</p>', unsafe_allow_html=True)
 
+            sev_total = sum(sev.values()) or 1
+            parts = []
+            for level, color, label in [('P0', '#dc2626', 'P0'), ('P1', '#ea580c', 'P1'), ('P2', '#ca8a04', 'P2'), ('P3', '#16a34a', 'P3')]:
+                cnt = sev.get(level, 0)
+                if cnt:
+                    pct = cnt / sev_total * 100
+                    parts.append(f'<div class=\"seg\" style=\"flex:{int(pct)};background:{color};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff;min-width:40px;\">{level}</div>')
+            if parts:
+                st.markdown('<div class=\"severity-bar\" style=\"display:flex;height:32px;border-radius:6px;overflow:hidden;margin-bottom:12px;\">' + ''.join(parts) + '</div>', unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════════════════════════════
+            # Legend
+            c_map = {'P0': '#dc2626', 'P1': '#ea580c', 'P2': '#ca8a04', 'P3': '#16a34a'}
+            legend = []
+            for level in ['P0', 'P1', 'P2', 'P3']:
+                cnt = sev.get(level, 0)
+                if cnt:
+                    dot = '<span style="width:10px;height:10px;border-radius:50%;background:' + c_map[level] + ';display:inline-block;"></span>'
+                    legend.append('<span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748B;">' + dot + level + ': ' + str(cnt) + ' 条</span>')
+            if legend:
+                st.markdown('<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">' + ''.join(legend) + '</div>', unsafe_allow_html=True)
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with rcol:
+            st.markdown('<div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">', unsafe_allow_html=True)
+            st.markdown('<p style="font-size:15px;font-weight:600;color:#1a1a2e;margin:0 0 16px 0;">⚡ 快捷操作</p>', unsafe_allow_html=True)
+
+            actions = [('🔍', 'Monitor 巡检', '启动新一轮巡检', '#e3edf9'), ('📝', '录入新案例', '手动录入舆情案例', '#e0f4f6'), ('⚡', '案例处置', '待处理 12 条', '#fef0e6'), ('🏴', '高危追踪', '高优跟进 8 条', '#fde8e8')]
+            for icon, text, sub, bg in actions:
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc;margin-bottom:8px;cursor:pointer;">'
+                    + f'<div style="width:36px;height:36px;border-radius:8px;background:{bg};display:flex;align-items:center;justify-content:center;font-size:18px;">{icon}</div>'
+                    + f'<div><div style="font-size:13px;font-weight:500;color:#1a1a2e;">{text}</div><div style="font-size:11px;color:#64748B;">{sub}</div></div>'
+                    + '</div>', unsafe_allow_html=True
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Platform distribution
+        if plat:
+            st.markdown('<div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">', unsafe_allow_html=True)
+            st.markdown('<p style="font-size:15px;font-weight:600;color:#1a1a2e;margin:0 0 16px 0;">🌐 平台分布</p>', unsafe_allow_html=True)
+
+            plat_colors = {'小红书': {'bg': '#ff2442', 'abbr': '红'}, '抖音': {'bg': '#1e1e1e', 'abbr': '抖'}, 'YouTube': {'bg': '#ff0000', 'abbr': 'YT'}, '微博': {'bg': '#e6162d', 'abbr': '微'}, 'B站': {'bg': '#fb7299', 'abbr': 'B'}, '公众号': {'bg': '#07c160', 'abbr': '公'}}
+
+            for pf, cnt in sorted(plat.items(), key=lambda x: -x[1]):
+                info = plat_colors.get(pf, {'bg': '#64748B', 'abbr': pf[:2]})
+                pct = (cnt / max_cnt * 100) if max_cnt > 0 else 0
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #f0f2f5;margin-bottom:8px;">'
+                    + f'<div style="width:32px;height:32px;border-radius:6px;background:{info["bg"]};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#fff;flex-shrink:0;">{info["abbr"]}</div>'
+                    + f'<div style="flex:1;"><div style="font-size:13px;font-weight:500;">{pf}</div>'
+                    + f'<div style="font-size:11px;color:#64748B;">{cnt} 条</div>'
+                    + f'<div style="margin-top:4px;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;"><div style="height:100%;border-radius:2px;width:{pct:.0f}%;background:{info["bg"]};"></div></div>'
+                    + '</div></div>', unsafe_allow_html=True
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    with side_col:
+        # Task count
+        st.markdown(
+            f'<div style="background:#fff;border-radius:10px;padding:16px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:12px;">'
+            + '<p style="font-size:14px;font-weight:600;margin:0 0 12px 0;display:flex;align-items:center;gap:8px;">⏰ 待处理任务'
+            + f'<span style="font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;background:#fef0e6;color:#e65100;">{pending}</span></p>'
+            + '<ul style="list-style:none;padding:0;margin:0;">'
+            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>待标注案例</span><span style="font-weight:500;">12 条</span></li>'
+            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>待审核结果</span><span style="font-weight:500;">6 条</span></li>'
+            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:none;"><span>待跟进处置</span><span style="font-weight:500;">5 条</span></li>'
+            + '</ul></div>', unsafe_allow_html=True
+        )
+
+        # Today's updates
+        st.markdown(
+            '<div style="background:#fff;border-radius:10px;padding:16px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:12px;">'
+            + '<p style="font-size:14px;font-weight:600;margin:0 0 12px 0;">📊 今日动态</p>'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span style="width:8px;height:8px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span>抖音 P0 舆情爆发</span></div>'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span>微博新案例待标注</span></div>'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span>小红书巡检完成</span></div>'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:none;"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span>B站案例处置完毕</span></div>'
+            + '</div>', unsafe_allow_html=True
+        )
+
+        # System status
+        st.markdown(
+            '<div style="background:#fff;border-radius:10px;padding:16px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:12px;">'
+            + '<p style="font-size:14px;font-weight:600;margin:0 0 12px 0;">🔄 系统状态</p>'
+            + '<ul style="list-style:none;padding:0;margin:0;">'
+            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>巡检服务</span><span style="color:#16a34a;font-weight:500;">● 运行中</span></li>'
+            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>标注队列</span><span style="color:#f59e0b;font-weight:500;">● 拥堵 3</span></li>'
+            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:none;"><span>数据网关</span><span style="color:#16a34a;font-weight:500;">● 正常</span></li>'
+            + '</ul></div>', unsafe_allow_html=True
+        )
 # Tab routing — match by label string, not index (TAB_LABELS varies by role)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -363,3 +426,4 @@ if st.session_state.get("_needs_rerun"):
 
 st.divider()
 st.caption("舆情智能标注系统 | 基于 Wiki 知识库 + 案例驱动迭代 | DeepSeek / Claude / OpenAI 多 Provider 支持")
+

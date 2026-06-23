@@ -274,7 +274,7 @@ class TestDoIngest:
 
     def test_ingest_success_passes_through(self, monkeypatch):
         """Successful ingest returns the ingest result dict."""
-        def _ok(scraped, annotation, url):
+        def _ok(scraped, annotation, url, init_status="待跟进"):
             return {"action": "case_generated", "case_file": "case-099.md",
                     "boundary_check": {}, "boundary_suggestions": []}
 
@@ -285,6 +285,33 @@ class TestDoIngest:
         result = _do_ingest({"原文内容": "x"}, {"严重度评级": "P1"}, "https://example.com")
         assert result["action"] == "case_generated"
         assert result["case_file"] == "case-099.md"
+
+    def test_do_ingest_maps_action_to_status(self, monkeypatch):
+        """分流建议 映射为正确的 init_status."""
+        captured_status = {}
+
+        def _capture(scraped, annotation, url, init_status="待跟进"):
+            captured_status["init_status"] = init_status
+            return {"action": "case_generated", "case_file": "case-099.md",
+                    "boundary_check": {}, "boundary_suggestions": []}
+
+        monkeypatch.setattr("ui.shared.ingest", _capture)
+
+        from ui.shared import _do_ingest
+
+        # 立即处理 → 待跟进
+        _do_ingest({"原文内容": "x"}, {"严重度评级": "P1", "分流建议": "立即处理"}, "")
+        assert captured_status["init_status"] == "待跟进"
+
+        # 可忽略 → 忽略
+        captured_status.clear()
+        _do_ingest({"原文内容": "x"}, {"严重度评级": "P3", "分流建议": "可忽略"}, "")
+        assert captured_status["init_status"] == "忽略"
+
+        # 未知分流建议 → 默认 待跟进
+        captured_status.clear()
+        _do_ingest({"原文内容": "x"}, {"严重度评级": "P2"}, "")
+        assert captured_status["init_status"] == "待跟进"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

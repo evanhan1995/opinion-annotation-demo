@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Sidebar rendering for the annotation dashboard.
 
 Extracted from app.py — no logic changes, pure code movement.
@@ -21,11 +21,6 @@ def render_sidebar(_patrol_pending: bool):
     """Render the sidebar with system status, dashboard, patrol, and XHS login."""
 
     with st.sidebar:
-        # ── User info & logout ──────────────────────────────────────
-        from ui.login import render_logout_button
-        render_logout_button()
-        st.markdown("<hr>", unsafe_allow_html=True)
-
         # Auto-load KB on first visit
         if st.session_state.config is None:
             config = load_config()
@@ -117,11 +112,11 @@ def render_sidebar(_patrol_pending: bool):
 
         # Status indicator
         if is_auto and is_sched_running:
-            st.caption("● 值守运行中 — 定时作业已注册")
+            st.markdown('<span class="status-dot active"></span> 值守运行中 — 定时作业已注册', unsafe_allow_html=True)
         elif is_auto and not is_sched_running:
-            st.caption("○ 值守已启用，等待调度器线程启动...")
+            st.markdown('<span class="status-dot inactive"></span> 值守已启用，等待调度器线程启动...', unsafe_allow_html=True)
         else:
-            st.caption("○ 值守已停止")
+            st.markdown('<span class="status-dot inactive"></span> 值守已停止', unsafe_allow_html=True)
 
         # Daily report time
         new_daily_time = st.text_input(
@@ -347,3 +342,5 @@ def render_sidebar(_patrol_pending: bool):
             st.markdown("<hr>", unsafe_allow_html=True)
             st.caption("微信公众号 (搜狗微信搜索)")
             st.caption("公开搜索，无需登录")
+
+

@@ -24,12 +24,7 @@ from typing import Optional
 
 # ── UTF-8 adapter (Windows) ───────────────────────────────────────────
 if sys.stdout and hasattr(sys.stdout, "buffer"):
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if sys.stderr and hasattr(sys.stderr, "buffer"):
-    if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
+import engine._compat
 # ── Project paths ──────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENGINE_DIR = PROJECT_ROOT / "engine"
@@ -50,24 +45,22 @@ _CONFIG = _load_config()
 
 
 # ── Timeout wrapper (shared by all agents) ──────────────────────────────
+_TIMEOUT_POOL = futures.ThreadPoolExecutor(max_workers=4)
+
+
 def call_with_timeout(fn, timeout: float, *args, **kwargs):
     """Run fn(*args, **kwargs) in a thread with hard wall-clock timeout.
 
     Returns (result, None) on success, (None, error_string) on timeout/exception.
-    Use this for ALL external calls (API, scraper, asyncio) that run inside
-    daemon threads where SDK-level timeouts are not reliable.
+    Uses a shared module-level thread pool for reuse — no per-call pool creation.
     """
-    executor = futures.ThreadPoolExecutor(max_workers=1)
+    fut = _TIMEOUT_POOL.submit(fn, *args, **kwargs)
     try:
-        fut = executor.submit(fn, *args, **kwargs)
-        try:
-            return fut.result(timeout=timeout), None
-        except futures.TimeoutError:
-            return None, f"操作超时 ({timeout}s)"
-        except Exception as e:
-            return None, str(e)
-    finally:
-        executor.shutdown(wait=False)
+        return fut.result(timeout=timeout), None
+    except futures.TimeoutError:
+        return None, f"操作超时 ({timeout}s)"
+    except Exception as e:
+        return None, str(e)
 
 
 # ── Model Registry (PRD §4.3) ─────────────────────────────────────────
@@ -246,11 +239,7 @@ class ForumResult:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Platform name mapping: agent key ↔ engine Chinese label
-PLATFORM_KEY_TO_LABEL = {
-    "youtube": "YouTube", "xiaohongshu": "小红书", "douyin": "抖音",
-    "bilibili": "B站", "weibo": "微博", "wechat": "微信公众号",
-}
-PLATFORM_LABEL_TO_KEY = {v: k for k, v in PLATFORM_KEY_TO_LABEL.items()}
+from engine.constants import PLATFORM_KEY_TO_LABEL, PLATFORM_LABEL_TO_KEY
 
 
 def rawdata_to_engine_dict(raw: RawData) -> dict:

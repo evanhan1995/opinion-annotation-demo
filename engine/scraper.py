@@ -31,23 +31,7 @@ ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
 RAW_CASES_DIR = PROJECT_DIR / "raw" / "cases"
 
-PLATFORM_ABBREV = {
-    "小红书": "xhs",
-    "YouTube": "ytb",
-    "X": "x",
-    "X (Twitter)": "x",
-    "Reddit": "reddit",
-    "Instagram": "ig",
-    "TikTok": "tt",
-    "抖音": "dy",
-    "B站": "bl",
-    "微博": "wb",
-    "微信公众号": "wc",
-    "通用网页": "web",
-    "新闻媒体": "news",
-    "论坛": "forum",
-    "其他": "other",
-}
+from engine.constants import PLATFORM_ABBREV
 
 
 def _extract_content_id(url: str, platform: str) -> str:
@@ -207,19 +191,15 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
 
     def _extract():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            executor = futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                fut = executor.submit(ydl.extract_info, url, False)
-                try:
-                    return fut.result(timeout=_scrape_timeout)
-                except futures.TimeoutError:
+            from agents.shared import call_with_timeout
+            info_data, err = call_with_timeout(ydl.extract_info, _scrape_timeout, url, False)
+            if err:
+                if "超时" in err:
                     result["原文内容"] = f"[抓取超时: yt-dlp 在 {_scrape_timeout}s 内未返回]"
-                    return None
-                except Exception as exc:
-                    result["原文内容"] = f"[抓取失败: {exc}]"
-                    return None
-            finally:
-                executor.shutdown(wait=False)
+                else:
+                    result["原文内容"] = f"[抓取失败: {err}]"
+                return None
+            return info_data
 
     try:
         info = _with_retry(
@@ -799,115 +779,166 @@ def _scrape_weibo(url: str, timeout: int = 30000) -> dict:
 
 
 def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
-    """Scrape 微信公众号 article — public page parsing via requests + BeautifulSoup."""
-    import requests as _requests
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+    """Scrape 微信公众号 article — Playwright + stealth to bypass anti-bot.
+
+    Handles direct mp.weixin.qq.com/s?... URLs. Sogou redirect URLs
+    (weixin.sogou.com/link?url=...) require search context and should be
+    scraped during Monitor search via _resolve_sogou_url() instead.
+    """
+    from engine.browser_pool import launch_context, BROWSER_ARGS
+
+    _error = lambda msg: {
+        "原文内容": f"(微信公众号抓取失败: {msg})",
+        "发布时间": "", "来源平台": "微信公众号", "发布者类型": "未知",
+        "互动数据": "", "原文链接": url,
+        "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
+        "评论列表": [],
     }
+
+    is_sogou = "weixin.sogou.com" in url
+    if is_sogou:
+        return _error("搜狗跳转链接需从Monitor搜索时抓取，请通过Monitor搜索结果查看发布时间等信息")
+
+    ctx = browser = pw = page = None
     try:
-        resp = _requests.get(url, headers=headers, timeout=min(timeout / 1000, 30))
-        if resp.status_code != 200:
-            return {
-                "原文内容": f"(微信公众号抓取失败: HTTP {resp.status_code})",
-                "发布时间": "", "来源平台": "微信公众号", "发布者类型": "未知",
-                "互动数据": "", "原文链接": url,
-                "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
-                "评论列表": [],
-            }
-        html = resp.text
-    except Exception as e:
-        return {
-            "原文内容": f"(微信公众号抓取失败: {e})",
-            "发布时间": "", "来源平台": "微信公众号", "发布者类型": "未知",
-            "互动数据": "", "原文链接": url,
-            "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0, "粉丝": 0, "播放量": None, "作者主页": []},
-            "评论列表": [],
-        }
+        ctx, browser, pw = launch_context(
+            headless=True, stealth=True,
+            args=BROWSER_ARGS + ["--no-sandbox"],
+            user_agent=(
+                "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            ),
+        )
+        page = ctx.new_page()
+        page.goto(url, timeout=min(timeout, 30000), wait_until="domcontentloaded")
+        page.wait_for_selector("#js_content, #activity-name", timeout=10000)
 
-    from bs4 import BeautifulSoup as _bs
-    soup = _bs(html, "lxml")
+        body_text = page.inner_text("body")[:500]
+        if "参数错误" in body_text or "param error" in body_text.lower():
+            return _error("参数错误：URL不完整或已过期，可能缺少sn参数")
+        if "antispider" in page.url.lower() or "请在微信客户端" in body_text:
+            return _error("微信反爬拦截：请在微信中打开文章，将链接复制后重试")
 
-    # Title: og:title meta or h2#activity-name
-    title = ""
-    og_title = soup.find("meta", property="og:title")
-    if og_title:
-        title = og_title.get("content", "")
-    if not title:
-        h2_title = soup.find("h2", id="activity-name")
-        if h2_title:
-            title = h2_title.get_text(strip=True)
-    if not title:
-        title_tag = soup.find("title")
-        if title_tag:
-            title = title_tag.get_text(strip=True)
-
-    # Author (公众号名称): og:article:author meta or span#js_name
-    author = ""
-    og_author = soup.find("meta", property="og:article:author")
-    if og_author:
-        author = og_author.get("content", "")
-    if not author:
-        js_name = soup.find(id="js_name")
-        if js_name:
-            author = js_name.get_text(strip=True)
-
-    # Publish time
-    publish_time = ""
-    og_time = soup.find("meta", property="og:article:published_time")
-    if og_time:
-        publish_time = og_time.get("content", "")[:19]
-    if not publish_time:
-        pub_em = soup.find("em", id="publish_time")
-        if pub_em:
-            publish_time = pub_em.get_text(strip=True)
-    # Try to parse timestamp from page scripts
-    if not publish_time:
-        import re
-        ts_match = re.search(r'var\s+ct\s*=\s*["\'](\d{10,13})["\']', html)
-        if ts_match:
+        # Title
+        title = ""
+        try:
+            el = page.query_selector("h2#activity-name")
+            if el:
+                title = el.inner_text().strip()
+        except Exception:
+            pass
+        if not title:
             try:
-                ts = int(ts_match.group(1))
-                if ts > 1e12:
-                    ts = ts / 1000.0
-                from datetime import datetime
-                publish_time = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                title = page.evaluate("() => document.title || ''")
             except Exception:
                 pass
 
-    # Content: div#js_content.rich_media_content
-    content = ""
-    js_content = soup.find("div", id="js_content")
-    if js_content:
-        # Remove hidden elements
-        for hidden in js_content.select(".rich_media_area_extra, script, style"):
-            hidden.decompose()
-        content = js_content.get_text(separator="\n", strip=True)
+        # Author (公众号名称)
+        author = ""
+        try:
+            el = page.query_selector("#js_name")
+            if el:
+                author = el.inner_text().strip()
+        except Exception:
+            pass
 
-    if not content:
-        # Try alternative: rich_media_content class
-        rm_content = soup.find("div", class_="rich_media_content")
-        if rm_content:
-            content = rm_content.get_text(separator="\n", strip=True)
+        # Publish time
+        publish_time = ""
+        try:
+            el = page.query_selector("em#publish_time")
+            if el:
+                publish_time = el.inner_text().strip()
+        except Exception:
+            pass
+        if not publish_time:
+            try:
+                publish_time = page.evaluate("""() => {
+                    const em = document.getElementById('publish_time');
+                    return em ? em.textContent.trim() : '';
+                }""")
+            except Exception:
+                pass
+        if not publish_time:
+            try:
+                el = page.query_selector(".rich_media_meta_text")
+                if el:
+                    publish_time = el.inner_text().strip()
+            except Exception:
+                pass
+        if not publish_time:
+            try:
+                ts_str = page.evaluate("""() => {
+                    if (typeof ct !== 'undefined') return String(ct);
+                    if (typeof publish_time !== 'undefined') return String(publish_time);
+                    return '';
+                }""")
+                if ts_str and ts_str.isdigit():
+                    ts = int(ts_str)
+                    if ts > 1e12:
+                        ts = ts / 1000
+                    from datetime import datetime
+                    publish_time = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
 
-    return {
-        "原文内容": content[:3000] if content else f"标题：{title}",
-        "发布时间": publish_time,
-        "来源平台": "微信公众号",
-        "发布者类型": f"公众号: {author}" if author else "未知",
-        "互动数据": "",
-        "原文链接": url,
-        "社媒数据": {
-            "作者": author,
-            "国家": "CN",
-            "点赞": 0,
-            "评论": 0,
-            "粉丝": 0,
-            "播放量": None,
-            "作者主页": [],
-        },
-        "评论列表": [],
-    }
+        # Content
+        content = ""
+        try:
+            el = page.query_selector("#js_content")
+            if el:
+                content = el.inner_text().strip()
+        except Exception:
+            pass
+        if not content:
+            try:
+                el = page.query_selector(".rich_media_content")
+                if el:
+                    content = el.inner_text().strip()
+            except Exception:
+                pass
+
+        return {
+            "原文内容": content[:3000] if content else f"标题：{title}",
+            "发布时间": publish_time,
+            "来源平台": "微信公众号",
+            "发布者类型": f"公众号: {author}" if author else "未知",
+            "互动数据": "",
+            "原文链接": url,
+            "社媒数据": {
+                "作者": author,
+                "国家": "CN",
+                "点赞": 0,
+                "评论": 0,
+                "粉丝": 0,
+                "播放量": None,
+                "作者主页": [],
+            },
+            "评论列表": [],
+        }
+
+    except Exception as e:
+        return _error(str(e)[:200])
+    finally:
+        if page:
+            try:
+                page.close()
+            except Exception:
+                pass
+        if ctx:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if browser:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        if pw:
+            try:
+                pw.stop()
+            except Exception:
+                pass
 
 
 def _scrape_instagram(url: str, timeout: int = 30000) -> dict:

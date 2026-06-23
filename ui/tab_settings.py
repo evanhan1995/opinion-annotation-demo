@@ -73,9 +73,17 @@ def render_tab_settings():
     )
 
     model = st.text_input(
-        "Model",
+        "Model（标注用）",
         value=engine_cfg.get("model", defaults["model"]),
         key="settings_model",
+    )
+
+    agent_model = st.text_input(
+        "Agent Model（知识库问答用）",
+        value=engine_cfg.get("agent_model", "deepseek-reasoner"),
+        key="settings_agent_model",
+        placeholder="deepseek-reasoner",
+        help="知识库问答使用推理模型，默认 deepseek-reasoner；如遇限流可改为 deepseek-chat",
     )
 
     c1, c2 = st.columns(2)
@@ -174,6 +182,7 @@ def render_tab_settings():
             "provider": provider,
             "api_key": api_key.strip(),
             "model": model.strip(),
+            "agent_model": agent_model.strip(),
             "api_base": api_base.strip(),
             "max_tokens": max_tokens,
             "temperature": temperature,

@@ -15,6 +15,7 @@ P0/P1熔断 (PRD §3.6):
 """
 import io
 import json
+import logging
 import os
 import sys
 import time
@@ -23,12 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# UTF-8 adapter
-if sys.stdout and hasattr(sys.stdout, "buffer"):
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if sys.stderr and hasattr(sys.stderr, "buffer"):
-    if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+import engine._compat
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from agents.shared import (
@@ -59,7 +55,8 @@ def _dispatch_emergency(annotation: Annotation) -> bool:
     severity = annotation.severity
     title = annotation.summary[:60] if annotation.summary else "无标题"
     tags_str = ", ".join(annotation.risk_tags) if annotation.risk_tags else "无"
-    msg_short = f"[{severity}] {title}"
+    # Escape single quotes for PowerShell: ' → ''
+    msg_short = f"[{severity}] {title}".replace("'", "''")
 
     # Desktop alert
     if sys.platform == "win32":
@@ -80,8 +77,8 @@ def _dispatch_emergency(annotation: Annotation) -> bool:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             triggered = True
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Desktop alert failed: %s", e)
 
     # Webhook dispatch
     notif_config_path = PROJECT_ROOT / "notification_config.json"
@@ -98,9 +95,8 @@ def _dispatch_emergency(annotation: Annotation) -> bool:
                 if ("P0" in levels and severity == "P0") or ("P1" in levels and severity == "P1"):
                     _send_webhook(wh["url"], annotation)
                     triggered = True
-        except Exception:
-            pass
-
+        except Exception as e:
+            _log.warning("Webhook dispatch failed: %s", e)
     return triggered
 
 
@@ -168,12 +164,14 @@ def reset_scraper_failures(platform: str = ""):
 # ── Flow A: Passive analysis ──────────────────────────────────────────
 def run_passive_analysis(url: str, pipeline_notes: str = "",
                          progress_callback=None,
-                         init_status: str = "待跟进") -> PipelineResult:
+                         init_status: str = "待跟进",
+                         keyword_context: str = "") -> PipelineResult:
     """User submits a URL → full pipeline: Scraper → Analyst → Handler → Curator.
 
     Args:
         progress_callback: Optional callable(stage: str, details: str) for
             sub-step progress reporting (e.g. pipeline UI).
+        keyword_context: The monitor keyword that triggered this URL (empty if manual).
     """
     started = datetime.now().isoformat()
     errors = []
@@ -195,7 +193,7 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
             with _failures_lock:
                 _SCRAPER_FAILURES.pop(platform, None)  # Reset on success
     except Exception as e:
-        platform = detect_platform(url) if 'detect_platform' in dir() else url
+        platform = detect_platform(url)
         if isinstance(platform, str) and platform != url:
             with _failures_lock:
                 _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
@@ -243,9 +241,10 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
     try:
         from agents.analyst import annotate
         if sentinel_result and sentinel_result.verdict == "fast_track":
-            annotation = annotate(raw, use_llm=False, sentinel_result=sentinel_result)
+            annotation = annotate(raw, keyword_context=keyword_context,
+                                  use_llm=False, sentinel_result=sentinel_result)
         else:
-            annotation = annotate(raw)
+            annotation = annotate(raw, keyword_context=keyword_context)
     except Exception as e:
         return PipelineResult(
             flow="passive_analysis", started_at=started,
@@ -274,7 +273,7 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
     try:
         from agents.curator import ingest
         kb_entry = ingest(raw, annotation, notes=pipeline_notes,
-                          init_status=init_status)
+                          init_status=init_status, keyword=keyword_context)
     except Exception as e:
         errors.append(f"Curator error: {e}")
         kb_entry = None
@@ -314,19 +313,30 @@ def run_active_monitor(pipeline_notes: str = "",
             errors=[f"Monitor error: {e}"],
         )
 
-    # For each new item, run passive analysis
+    # For each new item, run passive analysis (parallelized)
     item_results = []
-    for kr in harvest.keyword_results:
-        for item in kr.new_items:
-            try:
-                result = run_passive_analysis(item.url, pipeline_notes=pipeline_notes)
-                item_results.append(result)
-                if result.emergency_triggered:
-                    errors.append(f"P0/P1 meltdown triggered: {item.url}")
-                if not result.success:
-                    errors.extend(result.errors)
-            except Exception as e:
-                errors.append(f"Item pipeline error ({item.url}): {e}")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    def _process_item(item):
+        try:
+            result = run_passive_analysis(item.url, pipeline_notes=pipeline_notes,
+                                             keyword_context=item.keyword)
+            return result
+        except Exception as e:
+            return PipelineResult(
+                flow="active_monitor", started_at=started,
+                finished_at=datetime.now().isoformat(),
+                success=False, errors=[f"Item pipeline error ({item.url}): {e}"],
+            )
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="monitor-item") as pool:
+        future_map = {pool.submit(_process_item, item): item
+                      for kr in harvest.keyword_results
+                      for item in kr.new_items}
+        for fut in as_completed(future_map):
+            result = fut.result()
+            item_results.append(result)
+            if result.emergency_triggered:
+                errors.append(f"P0/P1 meltdown triggered")
 
     return PipelineResult(
         flow="active_monitor",

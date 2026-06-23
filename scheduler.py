@@ -20,10 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-if sys.stdout and hasattr(sys.stdout, "buffer"):
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-
+import engine._compat
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -261,7 +258,8 @@ class SchedulerThread(threading.Thread):
         if auto:
             _register_jobs(_schedule, cfg)
 
-        _scheduler_status["running"] = True
+        _scheduler_status["running"] = True  # Thread is alive and looping
+        _scheduler_status["auto_mode"] = auto
         _last_mtime = SCHEDULER_CONFIG_PATH.stat().st_mtime if SCHEDULER_CONFIG_PATH.exists() else 0
 
         while not self._stop_event.is_set():
@@ -275,6 +273,7 @@ class SchedulerThread(threading.Thread):
                     new_auto = new_cfg.get("auto_mode", False)
                     if new_auto and not auto:
                         _register_jobs(_schedule, new_cfg)
+                        _scheduler_status["auto_mode"] = True
                     elif not new_auto and auto:
                         _schedule.clear()
                         _scheduler_status["auto_mode"] = False

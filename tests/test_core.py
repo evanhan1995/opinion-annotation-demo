@@ -1,8 +1,8 @@
 """核心测试套件 —— index 更新 / 去重 / 纠偏差异判定。
 
 用法:
-    cd D:\Claude code\舆情标注Wiki
-    python -m pytest tests\test_core.py -v
+    cd "D:\\Claude code\\舆情标注Wiki"
+    python -m pytest tests\\test_core.py -v
 """
 
 import json
@@ -388,3 +388,46 @@ class TestSplitTableCells:
         row = "| P2 | [[cases/case-002|002]], [[cases/case-003|003]] |"
         result = _upsert_dimension_row(row, "P2", "[[cases/case-003|003]]")
         assert result == row
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 4: JSON utility functions (agents/shared.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestJsonUtils:
+    """Verify safe_json_parse and extract_json from agents.shared."""
+
+    def test_safe_json_parse_valid(self):
+        from agents.shared import safe_json_parse
+        result = safe_json_parse('{"key": "value"}')
+        assert result == {"key": "value"}
+
+    def test_safe_json_parse_invalid_returns_default(self):
+        from agents.shared import safe_json_parse
+        result = safe_json_parse("not json at all")
+        assert result is None
+
+    def test_safe_json_parse_invalid_with_custom_default(self):
+        from agents.shared import safe_json_parse
+        result = safe_json_parse("garbage", default=[])
+        assert result == []
+
+    def test_extract_json_plain(self):
+        from agents.shared import extract_json
+        result = extract_json('{"a": 1}')
+        assert result == {"a": 1}
+
+    def test_extract_json_with_fence(self):
+        from agents.shared import extract_json
+        result = extract_json('```json\n{"b": 2}\n```')
+        assert result == {"b": 2}
+
+    def test_extract_json_array(self):
+        from agents.shared import extract_json
+        result = extract_json("[1, 2, 3]")
+        assert result == [1, 2, 3]
+
+    def test_extract_json_array_with_fence(self):
+        from agents.shared import extract_json
+        result = extract_json('```json\n[4, 5]\n```')
+        assert result == [4, 5]

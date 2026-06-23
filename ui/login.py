@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Login page renderer for sentiment annotation system."""
 
 import base64
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 from engine.auth import authenticate, get_allowed_tabs, get_role_label
-from ui.theme import BRAND_COLORS
+# Theme: styling via inject_css() + CSS classes
 
 REMEMBERED_USER_PATH = Path(__file__).resolve().parent.parent / "config" / "remembered_user.json"
 
@@ -81,14 +81,13 @@ def render_login_page():
 
     with center:
         st.markdown(
-            f"<h1 style='text-align:center;color:{BRAND_COLORS['primary']};"
-            f"margin-bottom:0;border:none;'>sentiment intelligent annotation system</h1>",
+            '<h1 class="login-title" style="text-align:center;margin-bottom:0;">舆情智能标注系统</h1>',
             unsafe_allow_html=True,
         )
         st.markdown(
-            "<p style='text-align:center;color:#78909c;margin-bottom:1.5rem;'>"
-            "Wiki KB + LLM intelligent labeling and triage</p>",
+            '<p class="login-subtitle">Sentiment Intelligent Annotation System<br/>Wiki KB + LLM Intelligent Labeling &amp; Triage</p>',
             unsafe_allow_html=True,
+
         )
 
         st.markdown(
@@ -96,34 +95,34 @@ def render_login_page():
             unsafe_allow_html=True,
         )
         st.markdown(
-            f"<p style='text-align:center;font-size:1.1rem;font-weight:600;"
-            f"color:{BRAND_COLORS['text']};margin-bottom:1rem;'>user login</p>",
+            '<p style="text-align:center;font-size:1.1rem;font-weight:600;
+            color:#1a1a2e;margin-bottom:1rem;">用户登录</p>',
             unsafe_allow_html=True,
         )
 
         with st.form("login_form"):
             username = st.text_input(
-                "username", placeholder="enter username",
+                "username", placeholder="请输入用户名",
                 value=remembered["username"],
                 key="login_username",
             )
             password = st.text_input(
-                "password", type="password", placeholder="enter password",
+                "password", type="password", placeholder="请输入密码",
                 value=remembered["password"],
                 key="login_password",
             )
 
             col1, col2 = st.columns(2)
             with col1:
-                remember_user = st.checkbox("remember username", value=bool(remembered["username"]), key="login_remember")
+                remember_user = st.checkbox("记住用户名", value=bool(remembered["username"]), key="login_remember")
             with col2:
-                remember_pass = st.checkbox("remember password", value=bool(remembered["password"]), key="login_remember_pass")
+                remember_pass = st.checkbox("记住密码", value=bool(remembered["password"]), key="login_remember_pass")
 
-            submitted = st.form_submit_button("login", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("登录", type="primary", use_container_width=True)
 
             if submitted:
                 if not username.strip() or not password.strip():
-                    st.error("please enter username and password")
+                    st.error("请输入用户名和密码")
                 else:
                     user = authenticate(username.strip(), password.strip())
                     if user:
@@ -137,7 +136,7 @@ def render_login_page():
                         st.session_state.active_tab = get_allowed_tabs(user["role"])[0]
                         st.rerun()
                     else:
-                        st.error("wrong username or password")
+                        st.error("用户名或密码错误")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -157,7 +156,7 @@ def render_logout_button():
         role_label = get_role_label(user.get("role", ""))
         st.caption(f"{user.get('display_name', '?')} ({role_label})")
 
-        if st.button("logout", use_container_width=True, key="logout_btn"):
+        if st.button("退出登录", use_container_width=True, key="logout_btn"):
             for key in list(st.session_state.keys()):
                 if key in ("authenticated", "user", "active_tab"):
                     del st.session_state[key]

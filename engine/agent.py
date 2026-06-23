@@ -7,6 +7,7 @@
 """
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -35,7 +36,8 @@ def _parse_frontmatter(content: str) -> dict:
                     val = val.strip()
                     if key in ("title", "type", "severity", "action", "platform",
                                "status", "case_id", "url", "category",
-                               "tags", "confidence", "created", "updated"):
+                               "tags", "confidence", "created", "updated",
+                               "source_keyword"):
                         meta[key] = val
             meta["_body"] = parts[2].strip()
     if "_body" not in meta:
@@ -99,21 +101,56 @@ def _expand_taxonomy_tokens(tokens: list[str]) -> None:
         pass  # taxonomy not available, skip expansion
 
 
-def search_wiki(query: str, max_results: int = 5) -> list[dict]:
-    """Search wiki pages by keyword relevance.
+def _embedding_search(query: str, max_results: int) -> list[dict] | None:
+    """Try hybrid semantic+keyword search. Returns None if embeddings unavailable."""
+    try:
+        from engine.embeddings import EmbeddingService
+        svc = EmbeddingService()
+        if svc.case_count == 0:
+            return None
+        hybrid_results = svc.hybrid_search(query, top_k=max_results * 2)
+        if not hybrid_results:
+            return None
+        results = []
+        for hr in hybrid_results:
+            p = Path(hr["path"])
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            meta = _parse_frontmatter(text)
+            # Determine dirname from path relative to WIKI_DIR
+            try:
+                rel = p.relative_to(WIKI_DIR)
+                dirname = str(rel.parent) if rel.parent != Path(".") else ""
+            except ValueError:
+                dirname = ""
+            excerpt = meta["_body"][:200].replace("\n", " ")
+            results.append({
+                "path": str(rel) if dirname else p.name,
+                "title": meta.get("title", p.stem),
+                "type": meta.get("type", dirname),
+                "dirname": dirname,
+                "excerpt": excerpt,
+                "score": int(hr["score"] * 100),
+                "content": meta["_body"],
+                "frontmatter": {k: v for k, v in meta.items() if k != "_body"},
+            })
+        results.sort(key=lambda r: r["score"], reverse=True)
+        return results[:max_results]
+    except Exception:
+        return None
 
-    Returns list of dicts: {path, title, type, dirname, excerpt, score, content}
-    Sorted by relevance score descending.
-    """
+
+def _bigram_search(query: str, max_results: int) -> list[dict]:
+    """Fallback keyword-based search using bigram token matching."""
     tokens = _tokenize_query(query)
     if not tokens:
         return []
 
-    # Phase 1: taxonomy-aware query expansion
     _expand_taxonomy_tokens(tokens)
 
     def _score_and_add(f: Path, dirname: str) -> None:
-        """Score a single file and add to results if relevant."""
         try:
             text = f.read_text(encoding="utf-8")
             meta = _parse_frontmatter(text)
@@ -131,12 +168,11 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
                 score += body_lower.count(token)
 
             if score > 0:
-                # Case files get 1.5x boost — they carry the factual data users ask about
                 if dirname == "cases":
                     score = int(score * 1.5)
                 excerpt = meta["_body"][:200].replace("\n", " ")
                 results.append({
-                    "path": f"{dirname}/{f.name}",
+                    "path": f"{dirname}/{f.name}" if dirname else f.name,
                     "title": meta.get("title", f.stem),
                     "type": meta.get("type", dirname),
                     "dirname": dirname,
@@ -150,16 +186,13 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
 
     results = []
 
-    # Root wiki files (index.md, log.md) — include them for aggregate queries
     for f in WIKI_DIR.glob("*.md"):
         _score_and_add(f, "")
 
-    # Subdirectory pages
     for dirname in ("concepts", "entities", "sources", "syntheses", "cases", "authors"):
         dir_path = WIKI_DIR / dirname
         if not dir_path.exists():
             continue
-        # cases/ uses platform subdirectories (douyin/, wechat/, etc.) — need recursive
         glob_fn = dir_path.rglob if dirname == "cases" else dir_path.glob
         for f in sorted(glob_fn("*.md")):
             _score_and_add(f, dirname)
@@ -168,32 +201,81 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
     return results[:max_results]
 
 
+_log = logging.getLogger("yuqing")
+
+
+def search_wiki(query: str, max_results: int = 5) -> list[dict]:
+    """Search wiki pages by hybrid semantic+keyword relevance.
+
+    Uses embedding similarity when available, falls back to bigram token matching.
+    Returns list of dicts: {path, title, type, dirname, excerpt, score, content}
+    Sorted by relevance score descending.
+    """
+    # Phase 2: try embedding-based hybrid search first
+    results = _embedding_search(query, max_results)
+    if results is not None:
+        if results:
+            _log.info("Embedding search returned %d results for: %s", len(results), query[:80])
+        return results
+
+    # Fallback: bigram keyword search (Phase 1)
+    _log.info("Embedding search unavailable, falling back to bigram for: %s", query[:80])
+    return _bigram_search(query, max_results)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Agent prompt builder
 # ═══════════════════════════════════════════════════════════════════════════════
 
-AGENT_SYSTEM_PROMPT = """你是「扫地僧」——一个基于舆情标注知识库的智能助手。
+AGENT_SYSTEM_PROMPT = """你是「扫地僧」——舆情标注知识库的智能分析助手。你的用户是 PR 舆情团队，需要快速准确地从案例库中提取情报。
 
-你的知识来源是下方的 Wiki 页面。回答时遵循以下规则：
-1. **基于来源回答**——只使用提供的 Wiki 页面中的信息，不要编造
-2. **引用出处**——每个关键论断后标注来源页面，如 [[cases/case-001]]
-3. **承认边界**——如果知识库中没有相关信息，诚实说"知识库中暂无相关记录"
-4. **简洁**——直接回答问题，不铺垫，不废话
-5. **结构化**——涉及多个条目时用列表或表格呈现
+## 知识来源
+下方会提供知识库检索结果。每个案例包含：
+- 元数据行：类型 | 严重度 | 分流 | 平台 | 抓取关键词（如有）
+- 原始输入：被监控内容的标题、正文、发布者
+- 判据链：为何这样评级和分流
+- AI 原始标注：情感、风险标签等结构化标注
 
-当前知识库包含：
-- 标注规范（syntheses/）
-- 概念框架（concepts/）：严重度评级、情感分析、分流判断、真实性评估、平台适配
-- 案例库（cases/）：已有多个标注案例，含判据链
-- 实体说明（entities/）：舆情工具介绍
-- 工作复盘（sources/）：来自实际舆情工作的经验提炼
-- 跨平台关联（syntheses/cross-platform-*.md）：同一事件在不同平台的讨论碎片自动聚合
+## 回答规则
 
-跨平台查询引导：
-- 当用户问"某事件在哪些平台有讨论"或"跨平台对比"时，优先查看 syntheses/ 中的跨平台关联条目
-- 跨平台条目中 listed related_cases 字段会列出关联的案例，展开每个案例的平台和严重度
-- 如果知识库中已有多个平台的案例但未自动关联，请如实说明各平台情况
-- 回答这类问题时用表格呈现：平台 | 案例编号 | 严重度 | 摘要"""
+### 必须遵守
+1. 只使用提供的知识库内容，绝不编造事实
+2. 每个结论标注来源案例编号，如 [[case-001]]
+3. 知识库没有的信息，直接说"知识库中暂无相关记录"，不要猜测
+4. 先找证据再回答，不要凭案例标题推测
+
+### 回答格式
+- 统计类问题：先给总数，再用表格列出每个案例的关键字段
+- 原因类问题：先给结论一句话，再逐案例列出证据
+- 对比类问题：用表格呈现
+
+### 关键概念
+- 抓取关键词 = Monitor 监控的关键词，不是 Sentiment/SnowNLP 分值
+- "[快速通道]" = Sentinel 预筛选器直接判定（跳过 LLM），不是抓取方式
+- "Sentinel pre-filter" = 标注方法（快速通道），不是内容来源
+- 案例的发现途径和标注途径是两个不同概念
+
+### 禁止
+- 不要把 "[Sentinel pre-filter]" 当作案例的抓取来源
+- 不要把 "快速通道" 当作抓取关键词
+- 不要重复每个案例的模板文字（"边界讨论""处置备注"等）
+
+## 示例
+
+问：这些案例是根据什么关键词抓取的？
+答：所有 17 个案例的抓取关键词均为「爱数伴」。
+
+| 案例 | 平台 | 抓取关键词 | 标注方式 |
+|------|------|-----------|----------|
+| [[case-001]] | 抖音 | 爱数伴 | 快速通道 |
+| [[case-002]] | 抖音 | 爱数伴 | LLM 标注 |
+| [[case-003]] | 抖音 | 爱数伴 | 快速通道 |
+
+问：最近一周有多少 P0/P1 案例？
+答：最近一周共有 X 个案例，其中 P0 0 个、P1 Y 个、P2 Z 个、P3 W 个。[表格列出 P0/P1 案例详情]
+
+问：抖音平台的情感分布如何？
+答：抖音平台共 N 个案例。正面 X 个 (X%)，中性 Y 个 (Y%)，负面 Z 个 (Z%)。[表格]"""
 
 
 def _load_case_summary(case_ref: str) -> str | None:
@@ -221,9 +303,37 @@ def _load_case_summary(case_ref: str) -> str | None:
         return None
 
 
+def _extract_key_sections(content: str) -> str:
+    """Extract only key sections from a case page, skipping boilerplate.
+
+    Removes 边界讨论, 处置备注, 对标注规范的影响 — template text that
+    is identical across cases and wastes ~40% of LLM context.
+    """
+    # Split on ## headers
+    sections = re.split(r'\r?\n(?=## )', content)
+    kept = []
+    skip_prefixes = ('## 边界讨论', '## 处置备注', '## 对标注规范的影响')
+
+    for section in sections:
+        if not section.startswith(skip_prefixes):
+            # Trim section content to avoid per-section bloat
+            if section.startswith('## 原始输入') and len(section) > 600:
+                section = section[:600] + "\n[...]"
+            elif section.startswith('## AI 原始标注'):
+                # Keep full JSON block — it's structured and compact
+                pass
+            elif section.startswith('## 判据链') and len(section) > 500:
+                section = section[:500] + "\n[...]"
+            kept.append(section)
+
+    return "\n".join(kept)
+
+
 def build_agent_context(results: list[dict], expand_syntheses: bool = True) -> str:
     """Assemble search results into a context block for the LLM.
 
+    For case entries: strips boilerplate sections (边界讨论, 处置备注,
+    对标注规范的影响) and limits raw content to key sections only.
     When expand_syntheses is True and a result is from syntheses/ with
     related_cases frontmatter, also load and append those case summaries.
     """
@@ -246,12 +356,19 @@ def build_agent_context(results: list[dict], expand_syntheses: bool = True) -> s
             meta_line += f" | 分流: {fm['action']}"
         if fm.get("platform"):
             meta_line += f" | 平台: {fm['platform']}"
+        if fm.get("source_keyword"):
+            meta_line += f" | 抓取关键词: {fm['source_keyword']}"
+
+        # Strip boilerplate sections for case pages
+        content = r.get("content", "")
+        if r.get("dirname") == "cases" and content:
+            content = _extract_key_sections(content)
 
         blocks.append(
             f"### [{i+1}] {r['title']}\n"
             f"路径: {r['path']}\n"
             f"{meta_line}\n\n"
-            f"{r['content'][:1500]}"
+            f"{content[:2000]}"
         )
 
         # Expand related cases for synthesis entries
@@ -363,13 +480,15 @@ def ask_agent(
                    f"## 用户问题\n\n{query}",
     })
 
-    # Step 3: Call LLM
+    # Step 3: Call LLM — use reasoning model for agent Q&A
+    agent_config = dict(config)
+    agent_config["model"] = config.get("agent_model", "deepseek-reasoner")
     api_style = config.get("api_style", "openai")
     try:
         if api_style == "anthropic":
-            raw = _call_anthropic(messages, config)
+            raw = _call_anthropic(messages, agent_config)
         else:
-            raw = _call_openai_style(messages, config)
+            raw = _call_openai_style(messages, agent_config)
     except Exception as e:
         return {"error": True, "message": f"Agent API 调用失败: {e}"}
 

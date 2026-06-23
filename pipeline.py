@@ -168,6 +168,7 @@ def _run_pipeline():
         except Exception:
             pass
 
+    harvest = None  # 初始化，防止Step 1失败时UnboundLocalError
     try:
         # Step 1: Monitor — search once, store harvest globally
         _update_step("monitor", "running", details="正在执行关键词巡检...")
@@ -180,17 +181,14 @@ def _run_pipeline():
             # Wrap execute_job in a hard timeout — yt-dlp can hang indefinitely
             # in daemon threads even with socket_timeout set.
             _MONITOR_HARD_TIMEOUT = 120
-            _exec = futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                _fut = _exec.submit(execute_job, progress_callback=_monitor_progress,
-                                    sort_preference=sort_pref,
-                                    date_from=date_from, date_to=date_to)
-                harvest = _fut.result(timeout=_MONITOR_HARD_TIMEOUT)
-            except futures.TimeoutError:
-                _update_step("monitor", "error", error="Monitor搜索超时(120s)，跳过")
+            from agents.shared import call_with_timeout
+            harvest, err = call_with_timeout(execute_job, _MONITOR_HARD_TIMEOUT,
+                                            progress_callback=_monitor_progress,
+                                            sort_preference=sort_pref,
+                                            date_from=date_from, date_to=date_to)
+            if err:
+                _update_step("monitor", "error", error=f"Monitor执行异常: {err}")
                 return
-            finally:
-                _exec.shutdown(wait=False)
             if _check_timeout(start_time):
                 _update_step("monitor", "error", error="流水线整体超时")
                 return
@@ -224,19 +222,15 @@ def _run_pipeline():
 
             def _process_one(item):
                 try:
-                    executor = futures.ThreadPoolExecutor(max_workers=1)
-                    try:
-                        fut = executor.submit(
-                            run_passive_analysis,
-                            item.url, "自动化处置", None,
-                            init_status=init_status,
-                        )
-                        try:
-                            result = fut.result(timeout=_ITEM_TIMEOUT)
-                        except futures.TimeoutError:
-                            return [f"Item timeout ({item.url}): {_ITEM_TIMEOUT}s"], "P3"
-                    finally:
-                        executor.shutdown(wait=False)
+                    from agents.shared import call_with_timeout
+                    result, err = call_with_timeout(
+                        run_passive_analysis, _ITEM_TIMEOUT,
+                        item.url, "自动化处置", None,
+                        init_status=init_status,
+                        keyword_context=item.keyword,
+                    )
+                    if err:
+                        return [f"Item error ({item.url}): {err}"], "P3"
                     sev = result.annotation.severity if result.annotation else "P3"
                     if not result.success:
                         return result.errors, sev
@@ -329,6 +323,12 @@ def _notify_pipeline_complete(harvest, severity_counts: dict):
     try:
         from shared.notify import send_feishu_card
     except ImportError:
+        return
+
+    if harvest is None:
+        return
+
+    if not hasattr(harvest, "keyword_results") or harvest.keyword_results is None:
         return
 
     # Collect keywords

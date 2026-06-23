@@ -38,27 +38,35 @@ def _load_auth_config() -> dict:
 
 
 def _create_default_config() -> dict:
+    """Generate a fresh auth config with NO default accounts.
+
+    First-run admin password must be set via INIT_ADMIN_PASSWORD env var.
+    If unset, auth always returns None until the config file is hand-edited.
+    """
+    import os
     import secrets
     salt = secrets.token_hex(16)
 
     def _hash(pw):
-        return hashlib.sha256(f"{salt}{pw}".encode()).hexdigest()
+        return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 200_000).hex()
 
-    return {
-        "salt": salt,
-        "users": [
-            {"username": "admin", "password_hash": _hash("admin123"), "role": "admin", "display_name": "管理员"},
-            {"username": "monitor", "password_hash": _hash("monitor123"), "role": "monitor", "display_name": "监测组"},
-            {"username": "dispo", "password_hash": _hash("dispo123"), "role": "disposition", "display_name": "处置组"},
-            {"username": "editor", "password_hash": _hash("editor123"), "role": "report_editor", "display_name": "日报编辑"},
-        ],
-    }
+    users = []
+    init_pw = os.environ.get("INIT_ADMIN_PASSWORD", "")
+    if init_pw:
+        users.append({
+            "username": "admin",
+            "password_hash": _hash(init_pw),
+            "role": "admin",
+            "display_name": "管理员",
+        })
+
+    return {"salt": salt, "users": users}
 
 
 def authenticate(username: str, password: str) -> dict | None:
     config = _load_auth_config()
     salt = config.get("salt", "")
-    pw_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+    pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
     for user in config.get("users", []):
         if user["username"] == username and user["password_hash"] == pw_hash:
             return {

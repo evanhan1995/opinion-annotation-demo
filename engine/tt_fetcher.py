@@ -22,24 +22,11 @@ import engine._compat
 
 ENGINE_DIR = Path(__file__).resolve().parent
 
-# TikTokDownloader path — config.json → env var → default
-def _load_tt_path_config() -> str:
-    """Load TikTokDownloader path from config or env."""
-    import os as _os
-    env_val = _os.environ.get("TIKTOK_DOWNLOADER_PATH", "")
-    if env_val:
-        return env_val
-    config_path = ENGINE_DIR / "config.json"
-    if config_path.exists():
-        try:
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            return cfg.get("paths", {}).get("tiktok_downloader",
-                "D:/Claude code/Github skills/TikTokDownloader")
-        except (json.JSONDecodeError, OSError):
-            pass
-    return "D:/Claude code/Github skills/TikTokDownloader"
+from engine import get_path
 
-_TT_DOWNLOADER_PATH = Path(_load_tt_path_config())
+# TikTokDownloader path — config.json → env var → default
+_TT_DOWNLOADER = get_path("tiktok_downloader", "D:/Claude code/Github skills/TikTokDownloader")
+_TT_DOWNLOADER_PATH = Path(_TT_DOWNLOADER)
 _TT_AVAILABLE = False
 if _TT_DOWNLOADER_PATH.exists():
     _tt_src = str(_TT_DOWNLOADER_PATH)

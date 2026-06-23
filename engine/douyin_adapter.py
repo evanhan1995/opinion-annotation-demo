@@ -27,9 +27,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import engine._compat
+from engine import get_path
 
 ENGINE_DIR = Path(__file__).resolve().parent
-_MEDIACRAWLER_PATH = Path("D:/Claude code/MediaCrawler")
+_MEDIACRAWLER_PATH = Path(get_path("media_crawler", "D:/Claude code/MediaCrawler"))
 if _MEDIACRAWLER_PATH.exists() and str(_MEDIACRAWLER_PATH) not in sys.path:
     sys.path.insert(0, str(_MEDIACRAWLER_PATH))
 

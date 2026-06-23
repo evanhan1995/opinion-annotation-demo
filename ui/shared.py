@@ -587,9 +587,19 @@ def _save_annotation_output(
         return None
 
 
+_ACTION_STATUS_MAP = {
+    "立即处理": "待跟进",
+    "持续观察": "待跟进",
+    "可忽略": "忽略",
+    "正面可利用": "待跟进",
+}
+
+
 def _do_ingest(scraped_data: dict, annotation_result: dict, url: str = "") -> dict:
+    action = annotation_result.get("分流建议", "")
+    init_status = _ACTION_STATUS_MAP.get(action, "待跟进")
     try:
-        return ingest(scraped_data, annotation_result, url)
+        return ingest(scraped_data, annotation_result, url, init_status=init_status)
     except Exception as e:
         return {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
 

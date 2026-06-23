@@ -76,7 +76,9 @@ def _process_raw_items(page, raw_items: list) -> list:
             except Exception:
                 publish_time = str(ts)
 
-        real_url = _resolve_sogou_url(page, sogou_url)
+        real_url, extracted_time = _resolve_sogou_url(page, sogou_url)
+        if extracted_time:
+            publish_time = extracted_time
 
         results.append({
             "title": title[:200],
@@ -203,52 +205,57 @@ def _extract_permanent_url(page) -> str:
     return ""
 
 
-def _resolve_sogou_url(search_page, sogou_url: str) -> str:
-    """Click a Sogou redirect link to resolve the real mp.weixin.qq.com article URL.
+def _resolve_sogou_url(search_page, sogou_url: str) -> tuple[str, str]:
+    """Navigate to the Sogou redirect URL from search context to reach the article.
 
-    Sogou blocks direct navigation to /link?url=... with an anti-spider page.
-    Clicking the link on the search results page (with Referer) works.
+    Returns (canonical_url, publish_time).
+    canonical_url is the Sogou redirect URL (permanent, works in real browsers).
+    publish_time is extracted from the WeChat article page.
 
-    After the page loads, extracts the permanent __biz-based URL from page JS
-    (WeChat /s?src=11&timestamp=... links are session-bound and won't open
-    outside the search context).
+    WeChat permanent URLs constructed from JS globals (biz/mid/idx) are missing
+    the `sn` parameter and show "参数错误". Sogou redirect URLs are the only
+    reliable way to reach articles.
     """
+    publish_time = ""
+    ctx = search_page.context
+    page = None
     try:
-        link_el = search_page.query_selector(f'a[href="{sogou_url}"]')
-        if not link_el:
-            # Try partial match — Sogou may truncate href in DOM
-            import urllib.parse
-            parsed = urllib.parse.urlparse(sogou_url)
-            path_prefix = parsed.path + "?" + parsed.query[:60]
-            link_el = search_page.query_selector(f'a[href^="{path_prefix}"]')
+        page = ctx.new_page()
+        search_url = search_page.url
+        page.goto(sogou_url, timeout=15000, wait_until="domcontentloaded",
+                  referer=search_url)
+        page.wait_for_timeout(2000)
 
-        if not link_el:
-            return sogou_url
+        # If we landed on the Sogou redirect page, follow the redirect chain
+        # by waiting for redirect to mp.weixin.qq.com
+        if "mp.weixin.qq.com" not in page.url:
+            page.wait_for_timeout(3000)
 
-        ctx = search_page.context
-        with ctx.expect_page(timeout=15000) as new_page_info:
-            link_el.click()
-        new_page = new_page_info.value
-
-        try:
-            new_page.wait_for_load_state("domcontentloaded", timeout=15000)
-            new_page.wait_for_timeout(2000)
-
-            # Try extracting permanent URL first (works on both Sogou
-            # intermediate pages and direct WeChat article pages).
-            permanent = _extract_permanent_url(new_page)
-            if permanent:
-                new_page.close()
-                return permanent
-
-            if "mp.weixin.qq.com" in new_page.url:
-                return new_page.url
-        finally:
-            new_page.close()
+        # Extract publish time from the article page
+        if "mp.weixin.qq.com" in page.url:
+            try:
+                el = page.query_selector("em#publish_time")
+                if el:
+                    publish_time = el.inner_text().strip()
+            except Exception:
+                pass
+            if not publish_time:
+                try:
+                    el = page.query_selector(".rich_media_meta_text")
+                    if el:
+                        publish_time = el.inner_text().strip()
+                except Exception:
+                    pass
     except Exception:
         pass
+    finally:
+        if page:
+            try:
+                page.close()
+            except Exception:
+                pass
 
-    return sogou_url
+    return sogou_url, publish_time
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
