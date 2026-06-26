@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Centralized theme: brand palette, semantic colors, CSS injection, layout helpers.
 
 Import this module and call inject_css() once after st.set_page_config().
@@ -42,10 +42,10 @@ TYPOGRAPHY = {
 
 SEMANTIC_COLORS = {
     "severity": {
-        "P0": "#dc3545",
-        "P1": "#fd7e14",
-        "P2": "#ffc107",
-        "P3": "#28a745",
+        "P0": "#dc2626",
+        "P1": "#ea580c",
+        "P2": "#ca8a04",
+        "P3": "#16a34a",
     },
     "action": {
         "立即处理": "#dc3545",
@@ -87,6 +87,12 @@ SEMANTIC_COLORS = {
 def inject_css():
     """Inject custom CSS via st.markdown. Call once after st.set_page_config()."""
     P = BRAND_COLORS
+    # Google Fonts: Noto Sans SC (Chinese) + Inter (Latin)
+    st.markdown(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">',
+        unsafe_allow_html=True,
+    )
     css = f"""
     <style>
     /* ═══════════════════════════════════════════════════════════════════
@@ -97,7 +103,8 @@ def inject_css():
     }}
 
     html, body, [class*="css"] {{
-        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC",
+        font-family: "Noto Sans SC", "Inter",
+                     "Microsoft YaHei", "PingFang SC",
                      -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
@@ -152,8 +159,8 @@ def inject_css():
        Sidebar — 企业简洁侧边栏
        ═══════════════════════════════════════════════════════════════════ */
     section[data-testid="stSidebar"] {{
-        width: 280px !important;
-        background-color: #f8fafc;
+        width: 340px !important;
+        background-color: #fff;
         border-right: 1px solid {P['border']};
     }}
 
@@ -200,7 +207,7 @@ def inject_css():
        Main content — 企业简洁主内容区（居中约束）
        ═══════════════════════════════════════════════════════════════════ */
     .main > div {{
-        padding: 1.2rem 2rem;
+        padding: 1.2rem 2rem 3rem 2rem;
         max-width: 1400px;
     }}
 
@@ -218,7 +225,7 @@ def inject_css():
 
     div.stButton > button[kind="primary"] {{
         background: {P['primary']};
-        color: white;
+        color: white !important;
         border: none;
     }}
 
@@ -254,51 +261,6 @@ def inject_css():
         padding: 6px 0;
         border-bottom: 2px solid {P['border']};
         margin-bottom: 0.2rem;
-    }}
-
-        /* Topbar - brand header (matching HTML design) */
-     .topbar {{
-        background: linear-gradient(135deg, #0D47A1, #1565C0);
-        border-radius: 10px 10px 0 0;
-        padding: 0.5rem 1.5rem;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        box-shadow: 0 2px 8px rgba(13,71,161,0.15);
-    }}
-    .topbar-left {{
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }}
-    .topbar-logo {{
-        font-size: 1.4rem;
-        line-height: 1;
-    }}
-    .topbar-title {{
-        color: #ffffff;
-        font-size: 17px;
-        font-weight: 700;
-        white-space: nowrap;
-    }}
-    .topbar-right {{
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        color: #fff;
-        font-size: 13px;
-    }}
-    .topbar-avatar {{
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        background: #00ACC1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 14px;
-        font-weight: 600;
-        color: #fff;
     }}
 
     /*         /* ═══════════════════════════════════════════════════════════════════
@@ -403,6 +365,9 @@ def inject_css():
         background: #f59e0b;
         animation: pulse-dot 1.5s ease-in-out infinite;
     }}
+    .status-dot.pending {{ background: #f59e0b; }}
+    .status-dot.done {{ background: #16a34a; }}
+    .status-dot.urgent {{ background: #dc2626; }}
 
     /* ═══════════════════════════════════════════════════════════════════
        Data table refinements
@@ -422,7 +387,7 @@ def inject_css():
     .metric-change.down {{ color: #dc2626; }}
     
     /* Severity distribution legend */
-    .severity-legend {{ display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 12px 0; }}
+    .severity-legend {{ display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 12px 0; }}
     .severity-legend .item {{ display: flex; align-items: center; gap: 6px; font-size: 12px; color: #64748B; }}
     .severity-legend .dot {{ width: 10px; height: 10px; border-radius: 50%; }}
     .severity-legend .dot.p0 {{ background: #dc2626; }}
@@ -439,7 +404,7 @@ def inject_css():
 
     /* Platform distribution */
     .platform-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }}
-    .platform-item {{ display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 8px; background: #f8fafc; border: 1px solid #f0f2f5; }}
+    .platform-item {{ display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; background: #f8fafc; border: 1px solid #f0f2f5; }}
     .platform-item .pf-icon {{ width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #fff; flex-shrink: 0; }}
     .platform-item .pf-info {{ flex: 1; }}
     .platform-item .pf-name {{ font-size: 13px; font-weight: 500; }}
@@ -448,7 +413,7 @@ def inject_css():
     .platform-item .pf-bar-fill {{ height: 100%; border-radius: 2px; }}
 
     /* Sidebar cards */
-    .sidebar-card {{ background: #fff; border-radius: 10px; padding: 16px 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 12px; }}
+    .sidebar-card {{ background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 16px; margin-left: 12px; }}
 
     /* Task list items */
     .task-list {{ list-style: none; padding: 0; margin: 0; }}
@@ -457,52 +422,88 @@ def inject_css():
     .task-label {{ flex: 1; }}
     .task-value {{ font-weight: 500; }}
 
-    /* Status dots */
-    .status-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }}
-    .status-dot.pending {{ background: #f59e0b; }}
-    .status-dot.done {{ background: #16a34a; }}
-    .status-dot.urgent {{ background: #dc2626; }}
-
-    /* Topbar row -- blue gradient on first columns row */
-    div[data-testid="stHorizontalBlock"]:first-of-type {{
-        background: linear-gradient(135deg, #0D47A1, #1565C0) !important;
-        border-radius: 10px 10px 0 0 !important;
-        padding: 0.3rem 1.5rem !important;
-        gap: 0 !important;
-        margin-bottom: 0 !important;
+    /* ═══════════════════════════════════════════════════════════════════
+       Topbar — blue gradient matching Figma mockup.
+       Rendered as pure HTML (.topbar class) for reliable styling.
+       ═══════════════════════════════════════════════════════════════════ */
+    .topbar {{
+        height: 56px;
+        background: linear-gradient(135deg, #0D47A1 0%, #1565C0 100%);
+        display: flex;
+        align-items: center;
+        padding: 0 32px;
+        margin: -1.2rem -2rem 1.2rem -2rem;
+        box-shadow: 0 2px 8px rgba(13,71,161,0.25);
+        gap: 0;
     }}
-    /* Tab buttons styled as topbar tabs */
-    div[data-testid="stHorizontalBlock"]:first-of-type button[kind="primary"] {{
-        background: transparent !important;
-        color: #ffffff !important;
-        font-weight: 500 !important;
-        border: none !important;
-        border-bottom: 3px solid #00ACC1 !important;
-        border-radius: 0 !important;
-        padding: 8px 14px !important;
-        font-size: 14px !important;
-        box-shadow: none !important;
+    .topbar-logo {{
+        color: #fff;
+        font-size: 18px;
+        font-weight: 700;
+        white-space: nowrap;
+        margin-right: 32px;
     }}
-    div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"] {{
-        background: transparent !important;
+    .topbar-logo span {{ color: #00ACC1; }}
+    .topbar-tabs {{
+        display: flex;
+        align-items: center;
+        height: 56px;
+    }}
+    .topbar-tab {{
         color: rgba(255,255,255,0.7) !important;
-        font-weight: 400 !important;
-        border: none !important;
-        border-bottom: 3px solid transparent !important;
-        border-radius: 0 !important;
-        padding: 8px 14px !important;
-        font-size: 14px !important;
-        box-shadow: none !important;
+        font-size: 14px;
+        font-weight: 500;
+        padding: 0 16px;
+        height: 56px;
+        display: flex;
+        align-items: center;
+        text-decoration: none !important;
+        white-space: nowrap;
+        position: relative;
+        transition: color 0.15s ease;
     }}
-    div[data-testid="stHorizontalBlock"]:first-of-type button[kind="secondary"]:hover {{
-        color: #ffffff !important;
-        border-bottom: 3px solid rgba(255,255,255,0.3) !important;
-        background: transparent !important;
+    .topbar-tab:hover {{
+        color: rgba(255,255,255,0.9) !important;
     }}
-    /* Hide column gap in topbar */
-    div[data-testid="stHorizontalBlock"]:first-of-type div[data-testid="column"] {{
-        gap: 0 !important;
+    .topbar-tab.active {{
+        color: #fff !important;
     }}
+    .topbar-tab.active::after {{
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 12px;
+        right: 12px;
+        height: 3px;
+        background: #00ACC1;
+        border-radius: 3px 3px 0 0;
+    }}
+    .topbar-user {{
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: rgba(255,255,255,0.8);
+        font-size: 13px;
+    }}
+    .topbar-avatar {{
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: #00ACC1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 600;
+        color: #fff;
+    }}
+
+    /* Remove Streamlit column left-padding from first column in content rows. */
+    section[data-testid="stMain"] div[data-testid="stHorizontalBlock"]:not(:first-of-type) > div[data-testid="column"]:first-of-type {{
+        padding-left: 0 !important;
+    }}
+
     /* Dashboard section title */
     .section-title {{
         font-size: 1.15rem;
@@ -531,13 +532,398 @@ def inject_css():
     
     /* Severity bar */
     .severity-bar {{
-        display: flex;
-        height: 28px;
-        border-radius: 6px;
-        overflow: hidden;
-        margin: 8px 0 16px 0;
+        display: flex; height: 32px; border-radius: 6px; overflow: hidden; margin: 0 0 12px 0;
     }}
-    
+    .severity-bar .seg {{
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; font-weight: 600; color: #fff; min-width: 48px;
+    }}
+    .severity-bar .seg.p0 {{ background: #dc2626; }}
+    .severity-bar .seg.p1 {{ background: #ea580c; }}
+    .severity-bar .seg.p2 {{ background: #ca8a04; }}
+    .severity-bar .seg.p3 {{ background: #16a34a; }}
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Dashboard — 总览仪表板 (Figma mockup page 2)
+       ═══════════════════════════════════════════════════════════════════ */
+
+    /* Page header */
+    .page-header {{
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 24px;
+    }}
+    .page-header h1 {{
+        font-size: 24px; font-weight: 700; color: #1a1a2e;
+        border-bottom: none !important; padding-bottom: 0 !important;
+        margin-top: 0 !important; margin-bottom: 0 !important;
+        letter-spacing: 0 !important;
+    }}
+    .page-header .subtitle {{ font-size: 14px; color: #64748B; margin-top: 4px; }}
+    .date-badge {{
+        display: flex; align-items: center; gap: 8px;
+        background: #fff; padding: 8px 16px; border-radius: 8px;
+        font-size: 13px; color: #64748B;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }}
+
+    /* Metric cards — 4-column grid */
+    .metric-card {{
+        background: #fff; border-radius: 10px; padding: 20px 24px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }}
+    .metric-card .label {{ font-size: 13px; color: #64748B; margin-bottom: 8px; font-weight: 500; }}
+    .metric-card .value {{ font-size: 32px; font-weight: 700; color: #1a1a2e; line-height: 1.2; }}
+    .metric-card .change {{ font-size: 12px; margin-top: 6px; }}
+    .metric-card .change.up {{ color: #16a34a; }}
+    .metric-card .change.down {{ color: #dc2626; }}
+    .metric-card.highlight .value {{ color: #0D47A1; }}
+    .metric-card.warn .value {{ color: #e65100; }}
+    .metric-card.accent .value {{ color: #00ACC1; }}
+
+    /* Generic card */
+    .card {{
+        background: #fff; border-radius: 10px; padding: 20px 24px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 16px;
+    }}
+    .card-title {{ font-size: 15px; font-weight: 600; color: #1a1a2e; margin-bottom: 16px; }}
+
+    /* Quick action buttons — Streamlit st.button() with use_container_width=True.
+       Cannot be wrapped in custom HTML, so default Streamlit button styling applies. */
+
+    /* Figma-style outline button (non-interactive HTML button) */
+    .btn-outline-figma {{
+        background: #fff; border: 1px solid #d0d5dd; color: #1a1a2e;
+        padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500;
+        cursor: pointer; font-family: inherit;
+    }}
+    .btn-outline-figma:hover {{ border-color: #1565C0; color: #1565C0; }}
+
+    /* Sidebar list */
+    .sidebar-list {{ list-style: none; padding: 0; margin: 0; }}
+    .sidebar-list li {{
+        display: flex; justify-content: space-between;
+        padding: 8px 0; font-size: 13px; border-bottom: 1px solid #f0f2f5;
+    }}
+    .sidebar-list li:last-child {{ border-bottom: none; }}
+    .sidebar-list .val {{ font-weight: 500; }}
+
+    /* Task items (今日动态) */
+    .task-item {{
+        display: flex; align-items: center; gap: 10px; padding: 8px 0;
+        border-bottom: 1px solid #f0f2f5; font-size: 13px;
+    }}
+    .task-item:last-child {{ border-bottom: none; }}
+    .task-item .status-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
+
+    /* Badge */
+    .badge.orange {{ background: #fef0e6; color: #e65100; }}
+    .badge.blue  {{ background: #e3edf9; color: #0D47A1; }}
+    .badge.green {{ background: #dcfce7; color: #16a34a; }}
+
+    /* Sidebar card heading */
+    .sidebar-card h3 {{
+        font-size: 14px; font-weight: 600; margin-bottom: 14px;
+        display: flex; align-items: center; gap: 8px;
+    }}
+    .sidebar-card h3 .badge {{
+        font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500;
+    }}
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Entry & Annotation page (Figma page 3)
+       ═══════════════════════════════════════════════════════════════════ */
+    .section-label {{
+        font-size: 13px; font-weight: 500; color: #64748B; margin-bottom: 8px;
+    }}
+    .url-row {{ display: flex; gap: 10px; margin-bottom: 16px; }}
+    .url-input {{
+        flex: 1; padding: 10px 14px; border: 1px solid #d0d5dd;
+        border-radius: 8px; font-size: 14px; font-family: inherit; outline: none;
+    }}
+    .url-input:focus {{ border-color: #1565C0; box-shadow: 0 0 0 3px rgba(13,71,161,0.1); }}
+
+    .data-grid {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }}
+    .data-item {{
+        text-align: center; padding: 12px; background: #f8fafc;
+        border-radius: 8px; border: 1px solid #f0f2f5;
+    }}
+    .data-item .val {{ font-size: 18px; font-weight: 700; color: #0D47A1; }}
+    .data-item .lbl {{ font-size: 11px; color: #64748B; margin-top: 4px; }}
+
+    .classify-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }}
+    .classify-item .lbl {{ font-size: 12px; color: #64748B; margin-bottom: 6px; font-weight: 500; }}
+
+    .tag-row {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+    .tag {{
+        padding: 4px 12px; border-radius: 14px; font-size: 12px; font-weight: 500;
+        cursor: pointer; border: 1px solid #e2e8f0; background: #fff;
+        color: #64748B; display: inline-block; text-decoration: none;
+        transition: all 0.15s ease;
+    }}
+    .tag:hover {{ border-color: #1565C0; color: #1565C0; }}
+    .tag.active {{ border-color: #0D47A1; background: #e3edf9; color: #0D47A1; }}
+    .tag.green {{ border-color: #16a34a; color: #16a34a; }}
+    .tag.orange {{ border-color: #ea580c; color: #ea580c; }}
+    .tag.red {{ border-color: #dc2626; color: #dc2626; }}
+
+    .textarea {{
+        width: 100%; padding: 10px 14px; border: 1px solid #d0d5dd;
+        border-radius: 8px; font-size: 14px; font-family: inherit; outline: none;
+        resize: vertical; min-height: 100px;
+    }}
+    .textarea:focus {{ border-color: #1565C0; box-shadow: 0 0 0 3px rgba(13,71,161,0.1); }}
+
+    .action-bar {{ display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }}
+
+    .result-card {{
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+        padding: 16px 20px; border-left: 4px solid #0D47A1; margin-bottom: 12px;
+    }}
+    .result-card .r-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+    .result-card .r-title {{ font-size: 14px; font-weight: 600; }}
+    .result-card .r-tag {{ font-size: 11px; padding: 2px 10px; border-radius: 10px; }}
+    .result-card .r-body {{ font-size: 13px; color: #64748B; line-height: 1.6; }}
+    .result-card .r-info {{ display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: #64748B; flex-wrap: wrap; }}
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Monitor dashboard (Figma page 4)
+       ═══════════════════════════════════════════════════════════════════ */
+    .keyword-bar {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }}
+    .keyword-input {{
+        flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #d0d5dd;
+        border-radius: 8px; font-size: 13px; font-family: inherit; outline: none;
+    }}
+    .keyword-input:focus {{ border-color: #1565C0; }}
+    .keyword-tag {{
+        display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+        background: #e3edf9; color: #0D47A1; border-radius: 14px; font-size: 12px;
+        margin: 2px;
+    }}
+    .keyword-tag .remove {{ cursor: pointer; font-size: 14px; opacity: 0.6; }}
+    .keyword-tag .remove:hover {{ opacity: 1; }}
+
+    .platform-select {{ display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }}
+    .platform-opt {{
+        padding: 4px 12px; border: 1px solid #e2e8f0; border-radius: 14px;
+        font-size: 12px; cursor: pointer; background: #fff; color: #64748B;
+        display: inline-block; transition: all 0.15s ease;
+    }}
+    .platform-opt:hover {{ border-color: #1565C0; color: #1565C0; }}
+    .platform-opt.active {{ background: #0D47A1; color: #fff; border-color: #0D47A1; }}
+
+    .indicator-row {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }}
+    .indicator-item {{
+        text-align: center; padding: 16px; background: #f8fafc;
+        border-radius: 8px; border: 1px solid #f0f2f5;
+    }}
+    .indicator-item .val {{ font-size: 24px; font-weight: 700; color: #0D47A1; }}
+    .indicator-item .lbl {{ font-size: 12px; color: #64748B; margin-top: 4px; }}
+
+    .filter-bar {{ display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }}
+    .filter-bar .date-input {{
+        padding: 6px 12px; border: 1px solid #d0d5dd; border-radius: 6px;
+        font-size: 13px; font-family: inherit;
+    }}
+
+    .data-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    .data-table th {{
+        text-align: left; padding: 10px 12px; background: #f8fafc; color: #64748B;
+        font-weight: 500; border-bottom: 2px solid #e2e8f0;
+    }}
+    .data-table td {{
+        padding: 10px 12px; border-bottom: 1px solid #f0f2f5;
+    }}
+    .data-table tr:hover td {{ background: #f8fafc; }}
+
+    .status-badge {{
+        display: inline-block; padding: 2px 10px; border-radius: 10px;
+        font-size: 11px; font-weight: 500;
+    }}
+    .status-badge.new {{ background: #fde8e8; color: #dc2626; }}
+    .status-badge.processing {{ background: #fef0e6; color: #ea580c; }}
+    .status-badge.done {{ background: #dcfce7; color: #16a34a; }}
+    .status-badge.pending {{ background: #fef9c3; color: #a16207; }}
+
+    .severity-dot {{
+        display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px;
+    }}
+    .severity-dot.p0 {{ background: #dc2626; }}
+    .severity-dot.p1 {{ background: #ea580c; }}
+    .severity-dot.p2 {{ background: #ca8a04; }}
+    .severity-dot.p3 {{ background: #16a34a; }}
+
+    .pagination {{
+        display: flex; justify-content: space-between; align-items: center;
+        margin-top: 16px; font-size: 13px; color: #64748B;
+    }}
+    .pagination .page-btns {{ display: flex; gap: 4px; }}
+    .pagination .page-btns span {{
+        padding: 4px 10px; border: 1px solid #e2e8f0; border-radius: 4px; cursor: pointer;
+    }}
+    .pagination .page-btns span.active {{
+        background: #0D47A1; color: #fff; border-color: #0D47A1;
+    }}
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Knowledge base (Figma page 5)
+       ═══════════════════════════════════════════════════════════════════ */
+    .kb-layout {{ display: flex; gap: 24px; }}
+    .kb-left-panel {{ width: 300px; flex-shrink: 0; }}
+    .kb-content-panel {{ flex: 1; min-width: 0; }}
+
+    .search-wrap {{
+        position: relative; margin-bottom: 16px;
+    }}
+    .search-wrap .search-icon {{
+        position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #64748B; font-size: 14px;
+    }}
+
+    .tree-node {{ padding: 2px 0; }}
+    .tree-header {{
+        display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+        border-radius: 6px; font-size: 13px; cursor: pointer; color: #1a1a2e;
+        transition: background 0.15s ease;
+    }}
+    .tree-header:hover {{ background: #f0f2f5; }}
+    .tree-header.active {{ background: #e3edf9; color: #0D47A1; font-weight: 500; }}
+    .tree-header .count {{
+        font-size: 11px; color: #64748B; margin-left: auto;
+    }}
+    .tree-children {{ padding-left: 20px; }}
+
+    .conversation-area {{
+        min-height: 320px; display: flex; flex-direction: column;
+    }}
+    .msg-list {{
+        flex: 1; display: flex; flex-direction: column; gap: 12px;
+        padding: 12px 0; max-height: 380px; overflow-y: auto;
+    }}
+    .msg {{
+        padding: 10px 14px; border-radius: 10px; max-width: 85%; font-size: 13px; line-height: 1.5;
+    }}
+    .msg.ai {{
+        background: #f0f5ff; border: 1px solid #dce5f5; align-self: flex-start;
+    }}
+    .msg.user {{
+        background: #0D47A1; color: #fff; align-self: flex-end;
+    }}
+
+    .knowledge-content {{ }}
+    .kc-header {{
+        display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;
+    }}
+    .kc-title {{ font-size: 18px; font-weight: 600; }}
+    .kc-meta {{ font-size: 12px; color: #64748B; margin-top: 4px; }}
+    .kc-body {{
+        font-size: 14px; line-height: 1.8; color: #334155;
+    }}
+    .kc-body h4 {{
+        font-size: 15px; font-weight: 600; margin: 16px 0 8px; color: #1a1a2e;
+    }}
+    .kc-body p {{ margin-bottom: 12px; }}
+    .kc-body ul {{ padding-left: 20px; margin-bottom: 12px; }}
+    .kc-body li {{ margin-bottom: 4px; }}
+    .kc-tags {{ display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }}
+
+    .tag.blue {{ background: #e3edf9; color: #0D47A1; }}
+    .tag.green {{ background: #dcfce7; color: #16a34a; }}
+    .tag.orange {{ background: #fef0e6; color: #e65100; }}
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Sidebar (Figma page 6)
+       ═══════════════════════════════════════════════════════════════════ */
+    .sidebar-header {{
+        background: linear-gradient(135deg, #0D47A1, #1565C0); padding: 20px 24px; color: #fff;
+        margin: -1rem -1rem 0 -1rem;
+    }}
+    .sidebar-header h2 {{
+        font-size: 16px; font-weight: 600; color: #fff; border: none; padding: 0; margin: 0;
+        display: flex; align-items: center; gap: 8px;
+    }}
+    .sidebar-header .sub {{
+        font-size: 12px; opacity: 0.7; margin-top: 4px; color: rgba(255,255,255,0.8);
+    }}
+    .section-title {{
+        font-size: 12px; font-weight: 600; color: #64748B; text-transform: uppercase;
+        letter-spacing: 0.5px; margin-bottom: 8px; padding: 0 8px;
+    }}
+    .sys-status {{
+        display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+        background: #f8fafc; border-radius: 8px; margin-bottom: 6px;
+    }}
+    .sys-status .dot {{
+        width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }}
+    .sys-status .dot.green {{ background: #16a34a; }}
+    .sys-status .dot.yellow {{ background: #f59e0b; }}
+    .sys-status .dot.red {{ background: #dc2626; }}
+    .sys-status .label {{
+        font-size: 13px; font-weight: 500; flex: 1;
+    }}
+    .sys-status .value {{
+        font-size: 12px; color: #64748B;
+    }}
+    .sidebar-menu-item {{
+        display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+        border-radius: 8px; cursor: pointer; font-size: 13px; transition: all 0.15s;
+        color: #1a1a2e; text-decoration: none;
+    }}
+    .sidebar-menu-item:hover {{ background: #f0f2f5; }}
+    .sidebar-menu-item .m-icon {{
+        width: 28px; height: 28px; border-radius: 6px; display: flex;
+        align-items: center; justify-content: center; font-size: 14px;
+    }}
+    .sidebar-menu-item .m-icon.blue {{ background: #e3edf9; }}
+    .sidebar-menu-item .m-icon.teal {{ background: #e0f4f6; }}
+    .sidebar-menu-item .badge {{
+        margin-left: auto; background: #fde8e8; color: #dc2626;
+        padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 500;
+    }}
+    .auto-control {{
+        background: #f8fafc; border-radius: 10px; padding: 14px; border: 1px solid #e2e8f0;
+    }}
+    .control-row {{
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 12px;
+    }}
+    .control-row:last-child {{ margin-bottom: 0; }}
+    .control-label {{
+        font-size: 13px;
+    }}
+    .control-label .sub {{
+        font-size: 11px; color: #64748B; display: block;
+    }}
+    .pipeline-step {{
+        display: flex; align-items: center; gap: 10px; padding: 8px 0;
+        border-bottom: 1px solid #f0f2f5;
+    }}
+    .pipeline-step:last-child {{ border-bottom: none; }}
+    .pipeline-step .step-icon {{
+        width: 24px; height: 24px; border-radius: 50%; display: flex;
+        align-items: center; justify-content: center; font-size: 11px;
+        font-weight: 600; color: #fff; flex-shrink: 0;
+    }}
+    .step-icon.done {{ background: #16a34a; }}
+    .step-icon.progress {{ background: #1565C0; }}
+    .step-icon.pending {{ background: #d0d5dd; }}
+    .pipeline-step .step-info {{ flex: 1; }}
+    .pipeline-step .step-name {{ font-size: 13px; }}
+    .pipeline-step .step-status {{ font-size: 11px; color: #64748B; }}
+    .pipeline-step .step-time {{ font-size: 11px; color: #64748B; }}
+    .login-status {{ }}
+    .login-item {{
+        display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+        border-radius: 8px; background: #f8fafc; margin-bottom: 6px;
+    }}
+    .login-item .login-dot {{
+        width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }}
+    .login-dot.active {{ background: #16a34a; }}
+    .login-dot.error {{ background: #dc2626; }}
+    .login-dot.idle {{ background: #d0d5dd; }}
+    .login-item .pname {{ font-size: 13px; flex: 1; }}
+    .login-item .pstatus {{ font-size: 11px; color: #64748B; }}
+
 
 </style>
     """

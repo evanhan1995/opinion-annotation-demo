@@ -117,19 +117,6 @@ def _load_path_config(key: str, default: str = "") -> str:
             pass
     return default
 
-
-def _load_wechat_config() -> dict:
-    """Load wechat config from engine/config.json."""
-    config_path = ENGINE_DIR / "config.json"
-    if config_path.exists():
-        try:
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            return cfg.get("wechat", {})
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
-
-
 def _validate_cookie_search(cookie_str: str) -> bool:
     """Validate cookie can access XHS search page (not just API).
 

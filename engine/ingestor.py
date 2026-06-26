@@ -146,6 +146,8 @@ def ingest(
     boundary_suggestions = _generate_boundary_suggestion(boundary, annotation_result, scraped_data)
     # Author library: upsert before case so we can backlink
     social = scraped_data.get("社媒数据", {})
+    if not isinstance(social, dict):
+        social = {}
     platform = scraped_data.get("来源平台", "未知")
     author_file = _upsert_author(social, platform) if social else None
     case_file = _generate_auto_case(scraped_data, annotation_result, url, author_file,
@@ -412,7 +414,11 @@ def _generate_auto_case(
 
     severity_reason = annotation_result.get("严重度理由", "(无)")
     action_reason = annotation_result.get("分流理由", "(无)")
-    authenticity = annotation_result.get("真实性评估", {}).get("判断", "未评估")
+    authenticity_raw = annotation_result.get("真实性评估", {})
+    if isinstance(authenticity_raw, dict):
+        authenticity = authenticity_raw.get("判断", "未评估")
+    else:
+        authenticity = str(authenticity_raw) if authenticity_raw else "未评估"
     tags = annotation_result.get("风险标签", [])
 
     # Phase 1: controlled vocabulary fields
@@ -584,7 +590,10 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _update_global_index(new_filename: str, annotation_result: dict) -> None:
-    """Append new case row to the global index's case table."""
+    """Append new case row to the global index's case table.
+
+    Creates the initial case table if it doesn't exist yet.
+    """
     if not GLOBAL_INDEX_PATH.exists():
         return
 
@@ -611,6 +620,12 @@ def _update_global_index(new_filename: str, annotation_result: dict) -> None:
         new_lines.append(line.rstrip())
         if i == last_case_line_idx:
             new_lines.append(new_row)
+
+    # If no case table exists yet, create one at the end of the file
+    if last_case_line_idx == -1:
+        table_header = "| 案例 | 标题 | 严重度 | 分流建议 | 入库日期 |"
+        table_sep = "|------|------|--------|----------|----------|"
+        new_lines.extend(["", "## 案例列表", "", table_header, table_sep, new_row])
 
     with open(GLOBAL_INDEX_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines))

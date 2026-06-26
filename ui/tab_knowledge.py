@@ -189,9 +189,17 @@ def _render_report_download(selected: str):
 
 
 def _render_page_detail(selected: str | None, pages: list[dict]):
-    """Render the selected knowledge base page content."""
+    """Render the selected knowledge base page content with Figma styling."""
+    import html as _html
+
     if not selected:
-        st.info("👈 从左侧选择一个页面来浏览")
+        st.markdown(
+            '<div class="knowledge-content">'
+            '<p style="font-size:14px;color:#64748B;padding:16px 0;">'
+            '👈 从左侧选择一个页面来浏览</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         return
 
     page_paths = {p["path"]: p for p in pages}
@@ -233,20 +241,34 @@ def _render_page_detail(selected: str | None, pages: list[dict]):
     page_data = page_paths[selected]
     md_content = _convert_wikilinks(page_data.get("content", ""))
 
-    # Show status badge for case pages
+    # Wrap in Figma knowledge-content structure
+    kc_html = '<div class="knowledge-content">'
+
+    # Header
+    title = page_data.get("title", "未命名")
+    kc_html += f'<div class="kc-header"><div><div class="kc-title">{_html.escape(title)}</div>'
+    kc_html += '<div class="kc-meta">知识库条目</div></div></div>'
+
+    # Tags
     if page_data.get("type") == "case" or page_data.get("dir") == "cases":
         status = page_data.get("status", "")
+        tags_html = '<div class="kc-tags">'
         if status:
             status_colors = SEMANTIC_COLORS["kb_status"]
             color = status_colors.get(status, "#6c757d")
-            st.markdown(
-                f"<span style='background:{color};color:white;padding:2px 10px;border-radius:10px;"
-                f"font-size:0.9em;margin-right:8px;'>状态: {status}</span>",
-                unsafe_allow_html=True,
-            )
-            st.divider()
+            tags_html += f'<span class="tag blue">状态: {_html.escape(status)}</span>'
+        # Add category tag if available
+        cat = page_data.get("category", "") or page_data.get("dir", "")
+        if cat:
+            tags_html += f'<span class="tag blue">{_html.escape(cat)}</span>'
+        tags_html += '</div>'
+        kc_html += tags_html
 
-    st.markdown(md_content)
+    # Body
+    kc_html += f'<div class="kc-body">{md_content}</div>'
+    kc_html += '</div>'
+
+    st.markdown(kc_html, unsafe_allow_html=True)
 
 
 def _get_kb_password() -> str:
@@ -496,12 +518,20 @@ def _run_search(query: str) -> list[dict]:
 
 
 def render_tab_knowledge():
-    """Render the merged knowledge base + admin AI tab."""
-    st.subheader("📚 知识库")
-    st.caption("浏览知识库内容 + 管理员AI智能问答")
+    """Render the merged knowledge base + admin AI tab matching Figma design."""
+    import html as _html
 
     pages = _load_wiki_pages()
     has_password = bool(_get_kb_password())
+
+    # ── Page header (matches Figma) ─────────────────────────────────────
+    st.markdown(
+        '<div class="page-header">'
+        '<div><h1>知识库</h1>'
+        '<div class="subtitle">舆情知识库 · 案例检索 · 管理员AI智能问答</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     # Password gate
     if has_password and not st.session_state.get("kb_authenticated"):
@@ -515,23 +545,29 @@ def render_tab_knowledge():
                 st.error("密码错误，请重试")
         return
 
-    # ── Main layout ───────────────────────────────────────────────────
+    # ── Main layout (Figma: left 300px tree nav + right content) ────────
     left_col, right_col = st.columns([1, 3])
 
+    selected = st.session_state.get("_selected_page")  # initialized before search/nav
+
     with left_col:
-        # Phase 2: semantic search bar
+        # Search bar — Figma styled
         search_mode = st.session_state.get(f"{KB_KEY}search_mode", False)
 
-        # Pending clear: must happen BEFORE widget instantiation
         if st.session_state.pop(f"{KB_KEY}_pending_clear", False):
             st.session_state[f"{KB_KEY}search_input"] = ""
             st.session_state[f"{KB_KEY}search_mode"] = False
             search_mode = False
 
+        # Render left nav card
+        st.markdown(
+            '<div class="card"><div class="card-title">📂 知识库导航</div>',
+            unsafe_allow_html=True,
+        )
         search_query = st.text_input(
             "搜索知识库",
             key=f"{KB_KEY}search_input",
-            placeholder="输入关键词搜索...",
+            placeholder="搜索知识库...",
             label_visibility="collapsed",
         )
         if search_query:
@@ -544,10 +580,11 @@ def render_tab_knowledge():
                 st.rerun()
             _render_search_results(search_query)
         else:
-            st.markdown("**分类导航**")
             selected = _render_kb_nav(pages)
 
-        st.divider()
+        st.markdown('</div>', unsafe_allow_html=True)  # close card
+
+        # Lock / Refresh buttons
         if has_password and st.button("🔒 锁定知识库", key=f"{KB_KEY}lock", use_container_width=True):
             st.session_state.kb_authenticated = False
             st.rerun()
@@ -555,11 +592,12 @@ def render_tab_knowledge():
             st.rerun()
 
     with right_col:
-        # ── Taxonomy management toggle ────────────────────────────────
-        col_t, col_a = st.columns([1, 3])
+        # ── Taxonomy management toggle ──────────────────────────────────
+        if "show_taxonomy_panel" not in st.session_state:
+            st.session_state.show_taxonomy_panel = False
+
+        col_t, col_s = st.columns([1, 4])
         with col_t:
-            if "show_taxonomy_panel" not in st.session_state:
-                st.session_state.show_taxonomy_panel = False
             if st.button(
                 "🏷️ 词表管理" if not st.session_state.show_taxonomy_panel else "📄 返回浏览",
                 key=f"{KB_KEY}toggle_taxonomy", use_container_width=True,
@@ -571,65 +609,86 @@ def render_tab_knowledge():
             _render_taxonomy_panel()
             return
 
-        # ── Top: 管理员AI dialog ──────────────────────────────────────
-        with st.container():
-            st.markdown("**🤖 管理员AI**")
-            st.caption("基于知识库回答舆情标注相关问题。")
+        # ── 2-column grid: AI Chat (left) | Knowledge Detail (right) ────
+        chat_col, detail_col = st.columns([1, 1])
 
-            for msg in st.session_state.get("agent_messages", []):
-                with st.chat_message(msg["role"]):
-                    st.markdown(_convert_wikilinks(msg["content"]))
-                    if msg.get("citations"):
-                        _render_citations(msg["citations"])
+        with chat_col:
+            st.markdown(
+                '<div class="card" style="display:flex;flex-direction:column;">'
+                '<div class="card-title">🤖 管理员 AI</div>',
+                unsafe_allow_html=True,
+            )
 
-            if prompt := st.chat_input("向管理员AI提问...", key=f"{KB_KEY}chat_input"):
+            # Render existing messages as styled HTML bubbles
+            msgs = st.session_state.get("agent_messages", [])
+            if msgs:
+                msg_html = '<div class="msg-list">'
+                for msg in msgs:
+                    role_cls = "ai" if msg["role"] == "assistant" else "user"
+                    # Render markdown via st.markdown inside each bubble
+                    content = _convert_wikilinks(msg["content"])
+                    msg_html += f'<div class="msg {role_cls}">{content}</div>'
+                msg_html += '</div>'
+                st.markdown(msg_html, unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    '<div class="msg-list">'
+                    '<div class="msg ai">你好！我是知识库 AI 助手。我可以帮你查询舆情案例、政策法规、处置方案等信息。</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Chat input
+            if prompt := st.chat_input("输入您的问题...", key=f"{KB_KEY}chat_input"):
                 st.session_state.agent_messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
                 config = st.session_state.config
                 if not config or not config.get("api_key"):
-                    with st.chat_message("assistant"):
-                        st.error("请先在侧边栏配置 API Key（加载知识库）。")
                     st.session_state.agent_messages.append({
                         "role": "assistant",
-                        "content": "请先在侧边栏配置 API Key。",
+                        "content": "❌ 请先在侧边栏配置 API Key。",
                         "citations": [],
                     })
                 else:
-                    with st.chat_message("assistant"):
-                        with st.spinner("管理员AI思考中..."):
-                            history = []
-                            for m in st.session_state.agent_messages[-8:-1]:
-                                if m["role"] in ("user", "assistant"):
-                                    history.append({"role": m["role"], "content": m["content"]})
+                    with st.spinner("管理员AI思考中..."):
+                        history = []
+                        for m in st.session_state.agent_messages[-8:-1]:
+                            if m["role"] in ("user", "assistant"):
+                                history.append({"role": m["role"], "content": m["content"]})
+                        from engine.agent import ask_agent
+                        result = ask_agent(prompt, config, chat_history=history)
+                    if result.get("error"):
+                        st.session_state.agent_messages.append({
+                            "role": "assistant",
+                            "content": f"❌ {result['message']}",
+                            "citations": [],
+                        })
+                    else:
+                        answer = result["answer"]
+                        if result.get("citations"):
+                            cites_str = "<br><br>📚 **相关引用**：" + "、".join(
+                                c.get("title", "") for c in result["citations"][:5]
+                            )
+                            answer += cites_str
+                        st.session_state.agent_messages.append({
+                            "role": "assistant",
+                            "content": answer,
+                            "citations": result.get("citations", []),
+                        })
+                st.rerun()
 
-                            from engine.agent import ask_agent
-                            result = ask_agent(prompt, config, chat_history=history)
-
-                        if result.get("error"):
-                            st.error(result["message"])
-                            st.session_state.agent_messages.append({
-                                "role": "assistant",
-                                "content": f"❌ {result['message']}",
-                                "citations": [],
-                            })
-                        else:
-                            st.markdown(_convert_wikilinks(result["answer"]))
-                            if result.get("citations"):
-                                _render_citations(result["citations"])
-                            st.session_state.agent_messages.append({
-                                "role": "assistant",
-                                "content": result["answer"],
-                                "citations": result.get("citations", []),
-                            })
-
-            if st.session_state.get("agent_messages"):
+            if msgs:
                 if st.button("清空对话", key=f"{KB_KEY}clear_chat"):
                     st.session_state.agent_messages = []
                     st.rerun()
 
-        # ── Bottom: Page detail ───────────────────────────────────────
-        st.divider()
-        st.markdown("**📄 知识库详情**")
-        _render_page_detail(selected, pages)
+            st.markdown('</div>', unsafe_allow_html=True)  # close card
+
+        with detail_col:
+            # Knowledge detail card — matches Figma .knowledge-content design
+            st.markdown(
+                '<div class="card">'
+                '<div class="card-title">📄 知识库详情</div>',
+                unsafe_allow_html=True,
+            )
+            _render_page_detail(selected, pages)
+            st.markdown('</div>', unsafe_allow_html=True)  # close card

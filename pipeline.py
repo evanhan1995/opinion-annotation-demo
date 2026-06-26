@@ -11,6 +11,8 @@ from concurrent import futures
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from agents.shared import PROJECT_ROOT
+
 
 @dataclass
 class StepStatus:
@@ -181,7 +183,7 @@ def _run_pipeline():
             # Wrap execute_job in a hard timeout — yt-dlp can hang indefinitely
             # in daemon threads even with socket_timeout set.
             _MONITOR_HARD_TIMEOUT = 120
-            from agents.shared import call_with_timeout
+            from engine._compat import call_with_timeout
             harvest, err = call_with_timeout(execute_job, _MONITOR_HARD_TIMEOUT,
                                             progress_callback=_monitor_progress,
                                             sort_preference=sort_pref,
@@ -222,7 +224,7 @@ def _run_pipeline():
 
             def _process_one(item):
                 try:
-                    from agents.shared import call_with_timeout
+                    from engine._compat import call_with_timeout
                     result, err = call_with_timeout(
                         run_passive_analysis, _ITEM_TIMEOUT,
                         item.url, "自动化处置", None,

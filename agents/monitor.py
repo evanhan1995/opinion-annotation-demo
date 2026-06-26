@@ -983,6 +983,8 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
         kw_id = kw_entry["id"]
         kw_text = kw_entry["keyword"]
         base_count = kw_entry.get("result_count", defaults.get("result_count", 30))
+        _kw_fetch = kw_entry.get("fetch_mode", "default")
+        _kw_sort = _sort_type if _kw_fetch == "default" else ("date" if _kw_fetch == "date" else "hot")
 
         for platform in kw_entry.get("platforms", []):
             pair_idx += 1
@@ -1034,7 +1036,7 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
 
             try:
                 results = _search_with_timeout(
-                    searcher, kw_text, _sort_type, count,
+                    searcher, kw_text, _kw_sort, count,
                     date_from=search_date_from, date_to=search_date_to,
                 )
             except Exception:
@@ -1070,7 +1072,7 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
                 )
 
             # Store results in the appropriate field for backward compat
-            if _sort_type == "date":
+            if _kw_sort == "date":
                 kr.date_results = results
             else:
                 kr.hot_results = results
@@ -1082,7 +1084,7 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
             harvest.total_new += len(kr.new_items)
 
             # Archive single result set
-            _archive_results(results, date_str, kw_id, platform, _sort_type)
+            _archive_results(results, date_str, kw_id, platform, _kw_sort)
 
             harvest.keyword_results.append(kr)
 

@@ -9,13 +9,10 @@
     result = scrape("https://www.xiaohongshu.com/explore/xxx")
 """
 
-import io
 import json
 import re
 import sys
-import time
 import hashlib
-from concurrent import futures
 from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import urlparse
@@ -191,7 +188,7 @@ def _scrape_youtube(url: str, timeout: int = 30000) -> dict:
 
     def _extract():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            from agents.shared import call_with_timeout
+            from engine._compat import call_with_timeout
             info_data, err = call_with_timeout(ydl.extract_info, _scrape_timeout, url, False)
             if err:
                 if "超时" in err:
@@ -785,7 +782,7 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
     (weixin.sogou.com/link?url=...) require search context and should be
     scraped during Monitor search via _resolve_sogou_url() instead.
     """
-    from engine.browser_pool import launch_context, BROWSER_ARGS
+    from engine.browser_pool import get_shared_browser, new_context, BROWSER_ARGS
 
     _error = lambda msg: {
         "原文内容": f"(微信公众号抓取失败: {msg})",
@@ -799,11 +796,10 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
     if is_sogou:
         return _error("搜狗跳转链接需从Monitor搜索时抓取，请通过Monitor搜索结果查看发布时间等信息")
 
-    ctx = browser = pw = page = None
+    ctx = page = None
     try:
-        ctx, browser, pw = launch_context(
-            headless=True, stealth=True,
-            args=BROWSER_ARGS + ["--no-sandbox"],
+        browser, _pw = get_shared_browser()
+        ctx = new_context(
             user_agent=(
                 "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -927,16 +923,6 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
         if ctx:
             try:
                 ctx.close()
-            except Exception:
-                pass
-        if browser:
-            try:
-                browser.close()
-            except Exception:
-                pass
-        if pw:
-            try:
-                pw.stop()
             except Exception:
                 pass
 

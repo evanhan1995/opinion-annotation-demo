@@ -160,6 +160,70 @@ def _upsert_dimension_row(line: str, dimension_value: str, case_ref: str) -> str
 # Public API
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _create_initial_index() -> None:
+    """Create wiki/cases/index.md with initial table structure."""
+    INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    today = date.today().isoformat()
+    content = f"""---
+title: 案例索引
+type: index
+created: {today}
+updated: {today}
+---
+
+# 案例索引
+
+## 总览
+
+| 案例 | 标题 | 严重度 | 分流建议 | 平台 | 叙事分类 | 风险标签 |
+|------|------|--------|----------|------|----------|----------|
+| — | — | — | — | — | — | — |
+
+---
+
+## 维度索引
+
+### 按严重度
+
+| 严重度 | 案例 |
+|--------|------|
+| P0 | — |
+| P1 | — |
+| P2 | — |
+| P3 | — |
+
+### 按分流建议
+
+| 分流建议 | 案例 |
+|----------|------|
+| 立即处理 | — |
+| 持续观察 | — |
+| 可忽略 | — |
+| 正面可利用 | — |
+
+### 按平台
+
+| 平台 | 案例 |
+|------|------|
+| 小红书 | — |
+| 抖音 | — |
+| YouTube | — |
+| B站 | — |
+| 微博 | — |
+
+### 按分类
+
+| 分类 | 案例 |
+|------|------|
+
+### 按叙事
+
+| 叙事 | 案例 |
+|------|------|
+"""
+    INDEX_PATH.write_text(content, encoding="utf-8")
+
+
 def update_case_index(
     new_filename: str,
     severity: str,
@@ -187,7 +251,7 @@ def update_case_index(
         source: "auto_ingest" or "human_correction"
     """
     if not INDEX_PATH.exists():
-        return
+        _create_initial_index()
 
     case_id = new_filename.replace(".md", "")
     case_num = case_id.split("-")[1]
@@ -226,7 +290,7 @@ def update_case_index(
         }
 
     new_row = _dict_to_row(new_row_dict, use_headers)
-    # Find and insert after last case row
+    # Find and insert after last case row; replace placeholder if this is the first case
     last_case_line_idx = -1
     for i, line in enumerate(lines):
         if _is_table_row(line):
@@ -237,6 +301,14 @@ def update_case_index(
         new_lines.append(line.rstrip())
         if i == last_case_line_idx:
             new_lines.append(new_row)
+
+    # If no real case rows exist yet (fresh index), replace the placeholder row
+    if last_case_line_idx == -1:
+        for i, line in enumerate(new_lines):
+            stripped = line.strip()
+            if stripped.startswith("| — |") or stripped == "| — | — | — | — | — | — | — |":
+                new_lines[i] = new_row
+                break
 
     # --- Dimension tables: existing _upsert_dimension_row (well-tested) ---
     section = None

@@ -38,6 +38,16 @@ Thumbs.db
 # MCP / local config
 .mcp.json
 
+# Notification config (contains webhook URLs)
+notification_config.json
+
+# Runtime state files
+config/.session_active
+config/_debug.log
+
+# Node / Playwright
+node_modules/
+
 # Cache / temp
 engine/.xhs_dl_cache/
 *.tmp.*

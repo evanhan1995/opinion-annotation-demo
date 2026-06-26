@@ -13,19 +13,15 @@ P0/P1熔断 (PRD §3.6):
   Analyst returns P0/P1 → Orchestrator immediately triggers emergency_dispatch()
   before the rest of the pipeline continues.
 """
-import io
 import json
 import logging
-import os
 import sys
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import engine._compat
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from agents.shared import (
     PROJECT_ROOT, OUTPUTS_DIR, RAW_DIR,
@@ -333,10 +329,13 @@ def run_active_monitor(pipeline_notes: str = "",
                       for kr in harvest.keyword_results
                       for item in kr.new_items}
         for fut in as_completed(future_map):
+            item = future_map[fut]
             result = fut.result()
             item_results.append(result)
             if result.emergency_triggered:
-                errors.append(f"P0/P1 meltdown triggered")
+                errors.append(f"P0/P1 meltdown triggered: {item.url}")
+            if not result.success:
+                errors.extend(result.errors)
 
     return PipelineResult(
         flow="active_monitor",

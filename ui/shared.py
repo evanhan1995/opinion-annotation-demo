@@ -596,12 +596,25 @@ _ACTION_STATUS_MAP = {
 
 
 def _do_ingest(scraped_data: dict, annotation_result: dict, url: str = "") -> dict:
+    # Type guards: scrapers or AI output may occasionally produce malformed data
+    if not isinstance(scraped_data, dict):
+        return {"action": "error", "case_file": None, "boundary_check": {},
+                "_ingest_error": f"scraped_data 不是 dict，而是 {type(scraped_data).__name__}"}
+    if not isinstance(annotation_result, dict):
+        return {"action": "error", "case_file": None, "boundary_check": {},
+                "_ingest_error": f"annotation_result 不是 dict，而是 {type(annotation_result).__name__}"}
     action = annotation_result.get("分流建议", "")
     init_status = _ACTION_STATUS_MAP.get(action, "待跟进")
     try:
-        return ingest(scraped_data, annotation_result, url, init_status=init_status)
+        result = ingest(scraped_data, annotation_result, url, init_status=init_status)
     except Exception as e:
-        return {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
+        result = {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
+    # Track save in session_state so sidebar stats update reliably
+    if result.get("action") in ("case_generated", "skipped"):
+        st.session_state._entry_today_count = st.session_state.get("_entry_today_count", 0) + 1
+        if result.get("action") == "case_generated":
+            st.session_state._entry_saved_count = st.session_state.get("_entry_saved_count", 0) + 1
+    return result
 
 
 def _clear_correction_widgets():

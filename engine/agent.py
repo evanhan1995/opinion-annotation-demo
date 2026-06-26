@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from agents.shared import call_with_timeout
+from engine._compat import call_with_timeout
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent

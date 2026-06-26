@@ -27,7 +27,7 @@ def get_path(key: str, default: str = "") -> str:
     """
     # 1. Environment variable
     env_key = key.upper()
-    env_val = _os.environ.get(env_key, "")
+    env_val = _os.environ.get(env_key, "") or _os.environ.get(env_key + "_PATH", "")
     if env_val:
         return env_val
 

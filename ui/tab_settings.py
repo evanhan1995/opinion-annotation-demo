@@ -19,29 +19,47 @@ PROVIDER_DEFAULTS = {
 }
 
 
-def _load_engine_config() -> dict:
-    if CONFIG_PATH.exists():
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    return {}
+def _load_engine_config():
+    if not CONFIG_PATH.exists():
+        return {}
+    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
-def _save_engine_config(cfg: dict):
+def _save_engine_config(cfg):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _load_notif_config() -> dict:
-    if NOTIF_PATH.exists():
-        return json.loads(NOTIF_PATH.read_text(encoding="utf-8"))
-    return {"desktop_alert": True, "webhooks": []}
+def _load_notif_config():
+    _default = {"desktop_alert": True, "webhooks": []}
+    if not NOTIF_PATH.exists():
+        return _default
+    data = json.loads(NOTIF_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return _default
+    # Normalize webhooks list-of-strings → list-of-dicts (backward compat)
+    wh = data.get("webhooks", [])
+    if isinstance(wh, list):
+        fixed = []
+        for item in wh:
+            if isinstance(item, dict):
+                fixed.append(item)
+            elif isinstance(item, str):
+                fixed.append({"name": "", "url": item, "enabled": True, "trigger_level": "P0"})
+        data["webhooks"] = fixed
+    return data
 
 
-def _save_notif_config(cfg: dict):
+def _save_notif_config(cfg):
     NOTIF_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def render_tab_settings():
     """Render the Settings configuration tab."""
+
     st.subheader("⚙️ 系统设置")
     st.caption("配置 API 密钥、飞书通知 Webhook 等。修改后点击保存即时生效。")
 
@@ -116,6 +134,8 @@ def render_tab_settings():
     st.caption("配置公众号后台 Cookie 以启用微信公众号文章搜索。前往 mp.weixin.qq.com 登录后从浏览器开发者工具获取。")
 
     wechat_cfg = engine_cfg.get("wechat", {})
+    if not isinstance(wechat_cfg, dict):
+        wechat_cfg = {}
     wechat_cookie = st.text_area(
         "公众号后台 Cookie",
         value=wechat_cfg.get("cookie", ""),
@@ -140,7 +160,10 @@ def render_tab_settings():
         key="settings_desktop_alert",
     )
 
+    # webhooks already normalized in _load_notif_config
     webhooks = notif_cfg.get("webhooks", [])
+    if not isinstance(webhooks, list):
+        webhooks = []
     if not webhooks:
         webhooks = [{"name": "", "url": "", "enabled": True, "trigger_level": "P0"}]
 
@@ -173,7 +196,6 @@ def render_tab_settings():
 
     # ── Save button ────────────────────────────────────────────────
     if st.button("💾 保存设置", type="primary", use_container_width=True, key="settings_save"):
-        # Validate API key
         if not api_key.strip():
             st.error("API Key 不能为空")
             return
@@ -192,7 +214,6 @@ def render_tab_settings():
                 "appmsg_token": wechat_token.strip(),
             },
         }
-        # Preserve unmanaged keys from existing config
         for k, v in engine_cfg.items():
             if k not in new_engine:
                 new_engine[k] = v
@@ -214,6 +235,5 @@ def render_tab_settings():
                 })
         _save_notif_config(new_notif)
 
-        # Update in-memory config so other tabs pick up changes immediately
         st.session_state.config = new_engine
         st.success("设置已保存！API Key 和通知配置已即时生效。")

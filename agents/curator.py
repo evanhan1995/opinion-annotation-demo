@@ -198,7 +198,6 @@ def update_case_status(case_id: str, new_status: str, notes: str = "") -> dict:
         old_status = m.group(1).strip()
 
     # Update status in frontmatter
-    import re
     if re.search(r"^status:", fm, re.MULTILINE):
         fm_updated = re.sub(r"^status:.*$", f"status: {new_status}", fm, flags=re.MULTILINE)
     else:

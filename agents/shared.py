@@ -16,7 +16,6 @@ import json
 import os
 import re
 import sys
-from concurrent import futures
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +23,7 @@ from typing import Optional
 
 # ── UTF-8 adapter (Windows) ───────────────────────────────────────────
 if sys.stdout and hasattr(sys.stdout, "buffer"):
-import engine._compat
+    import engine._compat
 # ── Project paths ──────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENGINE_DIR = PROJECT_ROOT / "engine"
@@ -45,22 +44,7 @@ _CONFIG = _load_config()
 
 
 # ── Timeout wrapper (shared by all agents) ──────────────────────────────
-_TIMEOUT_POOL = futures.ThreadPoolExecutor(max_workers=4)
-
-
-def call_with_timeout(fn, timeout: float, *args, **kwargs):
-    """Run fn(*args, **kwargs) in a thread with hard wall-clock timeout.
-
-    Returns (result, None) on success, (None, error_string) on timeout/exception.
-    Uses a shared module-level thread pool for reuse — no per-call pool creation.
-    """
-    fut = _TIMEOUT_POOL.submit(fn, *args, **kwargs)
-    try:
-        return fut.result(timeout=timeout), None
-    except futures.TimeoutError:
-        return None, f"操作超时 ({timeout}s)"
-    except Exception as e:
-        return None, str(e)
+from engine._compat import call_with_timeout
 
 
 # ── Model Registry (PRD §4.3) ─────────────────────────────────────────

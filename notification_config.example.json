@@ -1,0 +1,11 @@
+{
+  "desktop_alert": true,
+  "webhooks": [
+    {
+      "name": "Webhook 1",
+      "url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_TOKEN",
+      "enabled": true,
+      "trigger_level": "P0"
+    }
+  ]
+}

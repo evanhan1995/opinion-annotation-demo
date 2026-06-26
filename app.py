@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """舆情智能标注系统 —— Web 界面
 
 使用方法:
@@ -6,6 +6,7 @@
     然后在浏览器中打开 http://localhost:8501
 """
 
+import html
 import sys
 import time
 from pathlib import Path
@@ -76,6 +77,178 @@ st.set_page_config(
 
 inject_css()
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Authentication gate
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Debug log helper ───────────────────────────────────────────────────
+import datetime as _dt
+def _dlog(msg):
+    try:
+        with open(PROJECT_DIR / "config" / "_debug.log", "a", encoding="utf-8") as _f:
+            _f.write(f"{_dt.datetime.now().strftime('%H:%M:%S.%f')[:-3]} {msg}\n")
+    except Exception:
+        pass
+
+_dlog(f"=== APP START === query_params={dict(st.query_params)}")
+
+# ── File-based logout safety net ──
+LOGOUT_FLAG = PROJECT_DIR / "config" / ".logout_flag"
+if LOGOUT_FLAG.exists():
+    _dlog(f"SAFETY NET: flag file found, clearing auth")
+    LOGOUT_FLAG.unlink()
+    st.session_state.pop("authenticated", None)
+    st.session_state.pop("user", None)
+    st.session_state.pop("active_tab", None)
+    _dlog(f"  after safety net, auth={st.session_state.get('authenticated', 'MISSING')}")
+
+if "authenticated" not in st.session_state:
+    # Try session persistence file (survives full-page navigation from tab <a href> links)
+    SESSION_FILE = PROJECT_DIR / "config" / ".session_active"
+    if SESSION_FILE.exists():
+        # Distinguish logout (partial key clear) from tab switch (full session loss).
+        # The old logout button only pops 3 keys; tab <a href> nav creates a brand-new
+        # session where NO app keys exist. Check for surviving keys to detect logout.
+        _survivor_keys = {"pipeline_init", "kb_stats", "config", "scraped_data",
+                          "agent_messages", "annotation_result", "correction_result"}
+        _is_logout = bool(_survivor_keys & set(st.session_state.keys()))
+        if _is_logout:
+            _dlog("logout detected via surviving session keys, deleting session file")
+            SESSION_FILE.unlink()
+        else:
+            try:
+                import json as _json
+                _sdata = _json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+                _age = time.time() - _sdata.get("timestamp", 0)
+                if _age < 86400:  # 24-hour validity
+                    _dlog(f"auth restored from session file (age={_age:.0f}s)")
+                    st.session_state.authenticated = True
+                    st.session_state.user = {
+                        "username": _sdata["username"],
+                        "role": _sdata["role"],
+                        "display_name": _sdata.get("display_name", _sdata["username"]),
+                    }
+                    from engine.auth import get_allowed_tabs
+                    st.session_state.active_tab = get_allowed_tabs(_sdata["role"])[0]
+                else:
+                    _dlog("session file expired, clearing")
+                    SESSION_FILE.unlink()
+            except Exception:
+                _dlog("session file corrupt, clearing")
+                try:
+                    SESSION_FILE.unlink()
+                except Exception:
+                    pass
+    if "authenticated" not in st.session_state:
+        _dlog(f"auth not in session, setting False")
+        st.session_state.authenticated = False
+
+_dlog(f"AUTH GATE: authenticated={st.session_state.get('authenticated', 'MISSING')}")
+
+if not st.session_state.authenticated:
+    _dlog("AUTH GATE: not authenticated, showing login page")
+    from ui.login import render_login_page
+    render_login_page()
+    st.stop()
+
+# ── Ensure session persistence file exists for tab <a href> navigation ──
+SESSION_FILE = PROJECT_DIR / "config" / ".session_active"
+if not SESSION_FILE.exists():
+    _user = st.session_state.get("user", {})
+    if _user:
+        import json as _json2
+        _sdata = _json2.dumps({
+            "username": _user.get("username", ""),
+            "role": _user.get("role", ""),
+            "display_name": _user.get("display_name", _user.get("username", "")),
+            "timestamp": time.time(),
+        }, ensure_ascii=False)
+        SESSION_FILE.write_text(_sdata, encoding="utf-8")
+        _dlog("session file created from auth gate pass")
+
+# Inject topbar CSS separately to ensure reliability
+st.markdown("""
+<style>
+.topbar {
+    height: 56px;
+    background: linear-gradient(135deg, #0D47A1 0%, #1565C0 100%);
+    display: flex;
+    align-items: center;
+    padding: 0 32px;
+    margin: -1.2rem -2rem 1.2rem -2rem;
+    box-shadow: 0 2px 8px rgba(13,71,161,0.25);
+    gap: 0;
+}
+.topbar-logo {
+    color: #fff;
+    font-size: 18px;
+    font-weight: 700;
+    white-space: nowrap;
+    margin-right: 32px;
+}
+.topbar-logo span { color: #00ACC1; }
+.topbar-tabs {
+    display: flex;
+    align-items: center;
+    height: 56px;
+}
+.topbar-tab {
+    color: rgba(255,255,255,0.7) !important;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 0 16px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    text-decoration: none !important;
+    white-space: nowrap;
+    position: relative;
+    transition: color 0.15s ease;
+}
+.topbar-tab:hover {
+    color: rgba(255,255,255,0.9) !important;
+}
+.topbar-tab.active {
+    color: #fff !important;
+}
+.topbar-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 12px;
+    right: 12px;
+    height: 3px;
+    background: #00ACC1;
+    border-radius: 3px 3px 0 0;
+}
+.topbar-user {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: rgba(255,255,255,0.8);
+    font-size: 13px;
+}
+.topbar-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #00ACC1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+}
+/* Override any leaked blue gradient from old theme.css rules.
+   The .topbar class is a plain DIV (not stHorizontalBlock), so this
+   reset does not affect the topbar itself. */
+div[data-testid="stHorizontalBlock"] {
+    background: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 初始化 session state
@@ -111,23 +284,6 @@ if not st.session_state.pipeline_init:
     from pipeline import reset_pipeline
     reset_pipeline()
     st.session_state.pipeline_init = True
-
-# Demo guide: show once per session
-if not st.session_state.demo_guide_shown and not st.session_state.annotation_result:
-    with st.expander("👋 快速入门指南", expanded=True):
-        st.markdown("""
-        1. **Monitor** → 「📡 Monitor」关键词巡检
-        2. **录入研判** → 「📝 录入研判」粘贴链接抓取标注，或手动录入
-        3. **案例处置** → 「📋 案例处置」查看和更新案例状态
-        4. **知识库** → 「📚 知识库」浏览知识库 + 管理员AI问答
-        5. **报告** → 「📊 报告」查看日报和月报
-        6. **高危追踪** → 「⚠️ 高危追踪」持续监控高风险舆情流量变化
-        7. **流水线** → 侧边栏「🔁 自动化流水线」一键执行全流程
-        """)
-        if st.button("知道了，开始使用", key="dismiss_guide"):
-            st.session_state.demo_guide_shown = True
-            st.rerun()
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # 侧边栏
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -141,51 +297,52 @@ render_sidebar(_patrol_pending)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Build role-filtered tab list
-TAB_LABELS = ["📊 总览", "📡 Monitor", "📝 录入研判", "📋 案例处置", "📚 知识库", "📊 报告", "⚠️ 高危追踪", "⚙️ 设置"]
+user_role = st.session_state.get("user", {}).get("role", "admin")
+from engine.auth import get_allowed_tabs
+TAB_LABELS = get_allowed_tabs(user_role)
 
-
-# Topbar with integrated tabs (st.columns + st.buttons)
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = TAB_LABELS[0]
-active_tab = st.session_state.active_tab
-_logo_col, *tab_cols, _user_col = st.columns([1.5] + [1] * 8 + [1.5])
-with _logo_col:
-    st.markdown('<span style="color:#fff;font-size:17px;font-weight:700;white-space:nowrap;">📊 舆情智能标注 <span style="color:#00ACC1;">|</span> OPS</span>', unsafe_allow_html=True)
-for _i, _label in enumerate(TAB_LABELS):
-    with tab_cols[_i]:
-        is_active = _label == active_tab
-        if st.button(_label, key=f"nav_{_label}", type="primary" if is_active else "secondary", use_container_width=True):
-            st.session_state.active_tab = _label
-            st.rerun()
-with _user_col:
-    st.markdown('<div style="display:flex;align-items:center;gap:8px;color:#fff;font-size:13px;justify-content:flex-end;"><span>管理员</span><div style="width:32px;height:32px;border-radius:50%;background:#00ACC1;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:#fff;">管</div></div>', unsafe_allow_html=True)
-
-
-_tid = int(st.query_params.get('tab', '0'))
+# Resolve active tab from query param or deferred switch BEFORE rendering topbar.
+try:
+    _tid = int(st.query_params.get('tab', '0'))
+except (ValueError, TypeError):
+    _tid = 0
 _rtab = TAB_LABELS[_tid] if 0 <= _tid < len(TAB_LABELS) else TAB_LABELS[0]
-if "active_tab" not in st.session_state or _rtab != st.session_state.active_tab:
+if "active_tab" not in st.session_state:
     st.session_state.active_tab = _rtab
-
-if "active_tab" not in st.session_state or st.session_state.active_tab not in TAB_LABELS:
-    st.session_state.active_tab = TAB_LABELS[0]
+elif _rtab != st.session_state.active_tab and _rtab in TAB_LABELS:
+    st.session_state.active_tab = _rtab
 
 # Handle deferred tab switches (e.g. from citation button "查看 case")
 if st.session_state.get("_pending_tab"):
     pending = st.session_state.pop("_pending_tab")
-    # Map old tab names to new ones
-    _tab_map = {
-        "📚 知识库": "📚 知识库",
-        "💬 扫地僧": "📚 知识库",  # merged
-    }
+    _tab_map = {"扫地僧": "知识库"}  # old → new name mapping
     st.session_state.active_tab = _tab_map.get(pending, pending)
+    # Sync query param so URL matches active tab on subsequent reruns
+    _new_idx = TAB_LABELS.index(st.session_state.active_tab)
+    st.query_params['tab'] = str(_new_idx)
 
-# Styled button-bar tab navigation (desktop tab style)
+if st.session_state.active_tab not in TAB_LABELS:
+    st.session_state.active_tab = TAB_LABELS[0]
 active_tab = st.session_state.active_tab
-# Tab switching -- radio styled as integrated topbar tabs
-curr_idx = TAB_LABELS.index(st.session_state.active_tab) if st.session_state.active_tab in TAB_LABELS else 0
-st.markdown('</div>', unsafe_allow_html=True)
 
+# Topbar with integrated tabs — rendered as pure HTML with anchor links
+# for reliable blue-gradient styling (Streamlit st.columns + CSS selectors
+# cannot reliably target a specific horizontal block due to DOM wrapping).
+_tabs_html = ""
+for _i, _label in enumerate(TAB_LABELS):
+    _is_active = " active" if _label == active_tab else ""
+    _tabs_html += f'<a class="topbar-tab{_is_active}" href="?tab={_i}">{_label}</a>'
 
+st.html(
+    f'<div class="topbar">'
+    f'<div class="topbar-logo">舆情智能标注 <span>|</span> OPS</div>'
+    f'<nav class="topbar-tabs">{_tabs_html}</nav>'
+    f'<div class="topbar-user"><span>{st.session_state.get("user", {}).get("display_name", "管理员")}</span><div class="topbar-avatar">{st.session_state.get("user", {}).get("display_name", "管")[0]}</div></div>'
+    f'</div>'
+)
+
+active_tab = st.session_state.active_tab
+curr_idx = TAB_LABELS.index(active_tab) if active_tab in TAB_LABELS else 0
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pipeline lock: block tab interactions while pipeline is running
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -251,17 +408,15 @@ def _render_overview():
         stats = None
 
     if not stats or stats.get('total_cases', 0) == 0:
-        st.markdown('<p class=\"section-title\">📊 总览仪表板</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-title">📊 总览仪表板</p>', unsafe_allow_html=True)
         st.info('系统尚未积累足够数据。请先运行 Monitor 巡检或录入案例。')
         qs1, qs2 = st.columns(2)
         with qs1:
             if st.button('📡 执行 Monitor 巡检', use_container_width=True, key='ov_empty_monitor'):
-                st.session_state.active_tab = '📡 Monitor'
-                st.rerun()
+                st.session_state._pending_tab = 'Monitor'
         with qs2:
             if st.button('📝 录入新案例', use_container_width=True, key='ov_empty_entry'):
-                st.session_state.active_tab = '📝 录入研判'
-                st.rerun()
+                st.session_state._pending_tab = '录入研判'
         return
 
     sev = stats.get('severity_dist', {})
@@ -277,140 +432,159 @@ def _render_overview():
 
     with main_col:
         # Page header
+        from datetime import datetime as _dt
         st.markdown(
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">'
-            + '<h1 style="font-size:24px;font-weight:700;color:#1a1a2e;margin:0;border:none;padding:0;">总览仪表板</h1>'
-            + '<div style="display:flex;align-items:center;gap:8px;background:#fff;padding:8px 16px;border-radius:8px;font-size:13px;color:#64748B;box-shadow:0 1px 3px rgba(0,0,0,0.06);">📅 2026-06-23 · 最近7天</div>'
-            + '</div>', unsafe_allow_html=True
+            '<div class="page-header">'
+            '<div>'
+            '<h1>总览仪表板</h1>'
+            f'<div class="subtitle">舆情数据实时监控 · 更新于 {_dt.now().strftime("%Y-%m-%d %H:%M")}</div>'
+            '</div>'
+            '<div class="date-badge"><span>📅</span><span>最近7天</span></div>'
+            '</div>',
+            unsafe_allow_html=True
         )
 
-        # Metric cards (4 in a row with delta)
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric('📋 总案例数', total, '↑ 较上周 +12.5%')
-        with m2:
-            st.metric('🚨 高优待处理 P0/P1', p0p1, f'较昨日 +{p0p1}', delta_color='inverse')
-        with m3:
-            st.metric('🌐 覆盖平台', len(plat), '小红书 · 抖音 · 微博')
-        with m4:
-            st.metric('📌 待跟进案例', pending, f'{pending} 条待处理', delta_color='inverse')
+        # Metric cards (4 in a row)
+        st.markdown(
+            '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">'
+            f'<div class="metric-card highlight"><div class="label">📋 总案例数</div><div class="value">{total}</div><div class="change up">↑ 12.5% 较上周</div></div>'
+            f'<div class="metric-card warn"><div class="label">⚠️ 高优待处理</div><div class="value">{p0p1}</div><div class="change down">↑ {p0p1} 较昨日</div></div>'
+            f'<div class="metric-card"><div class="label">📡 覆盖平台</div><div class="value">{len(plat)}</div><div class="change up">小红书 · 抖音 · 微博 · B站</div></div>'
+            f'<div class="metric-card accent"><div class="label">📌 待跟进案例</div><div class="value">{pending}</div><div class="change down">↓ 5 较昨日</div></div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
         # Two-column: severity + quick actions
-        lcol, rcol = st.columns(2)
+        lcol, rcol = st.columns(2, gap="small")
         with lcol:
-            st.markdown('<div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">', unsafe_allow_html=True)
-            st.markdown('<p style="font-size:15px;font-weight:600;color:#1a1a2e;margin:0 0 16px 0;">⚠️ 严重度分布</p>', unsafe_allow_html=True)
-
             sev_total = sum(sev.values()) or 1
-            parts = []
-            for level, color, label in [('P0', '#dc2626', 'P0'), ('P1', '#ea580c', 'P1'), ('P2', '#ca8a04', 'P2'), ('P3', '#16a34a', 'P3')]:
+            sev_labels = {'P0': 'P0 严重', 'P1': 'P1 高危', 'P2': 'P2 中危', 'P3': 'P3 低危'}
+            segs = []
+            for level, cls in [('P0', 'p0'), ('P1', 'p1'), ('P2', 'p2'), ('P3', 'p3')]:
                 cnt = sev.get(level, 0)
                 if cnt:
-                    pct = cnt / sev_total * 100
-                    parts.append(f'<div class=\"seg\" style=\"flex:{int(pct)};background:{color};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff;min-width:40px;\">{level}</div>')
-            if parts:
-                st.markdown('<div class=\"severity-bar\" style=\"display:flex;height:32px;border-radius:6px;overflow:hidden;margin-bottom:12px;\">' + ''.join(parts) + '</div>', unsafe_allow_html=True)
-
-            # Legend
-            c_map = {'P0': '#dc2626', 'P1': '#ea580c', 'P2': '#ca8a04', 'P3': '#16a34a'}
+                    pct = round(cnt / sev_total * 100)
+                    segs.append(f'<div class="seg {cls}" style="flex:{max(pct,8)}">{level} {pct}%</div>')
             legend = []
-            for level in ['P0', 'P1', 'P2', 'P3']:
+            for level, cls in [('P0', 'p0'), ('P1', 'p1'), ('P2', 'p2'), ('P3', 'p3')]:
                 cnt = sev.get(level, 0)
                 if cnt:
-                    dot = '<span style="width:10px;height:10px;border-radius:50%;background:' + c_map[level] + ';display:inline-block;"></span>'
-                    legend.append('<span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748B;">' + dot + level + ': ' + str(cnt) + ' 条</span>')
+                    legend.append(f'<div class="item"><span class="dot {cls}"></span>{sev_labels[level]} · {cnt} 条</div>')
+            # Single st.markdown — all children are HTML, no Streamlit widgets in between
+            sev_html = '<div class="card"><div class="card-title">⚠️ 严重度分布</div>'
+            if segs:
+                sev_html += f'<div class="severity-bar">{"".join(segs)}</div>'
             if legend:
-                st.markdown('<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">' + ''.join(legend) + '</div>', unsafe_allow_html=True)
-
-            st.markdown('</div>', unsafe_allow_html=True)
+                sev_html += f'<div class="severity-legend">{"".join(legend)}</div>'
+            sev_html += '</div>'
+            st.markdown(sev_html, unsafe_allow_html=True)
 
         with rcol:
-            st.markdown('<div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">', unsafe_allow_html=True)
-            st.markdown('<p style="font-size:15px;font-weight:600;color:#1a1a2e;margin:0 0 16px 0;">⚡ 快捷操作</p>', unsafe_allow_html=True)
-
-            actions = [('🔍', 'Monitor 巡检', '启动新一轮巡检', '#e3edf9'), ('📝', '录入新案例', '手动录入舆情案例', '#e0f4f6'), ('⚡', '案例处置', '待处理 12 条', '#fef0e6'), ('🏴', '高危追踪', '高优跟进 8 条', '#fde8e8')]
-            for icon, text, sub, bg in actions:
-                st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc;margin-bottom:8px;cursor:pointer;">'
-                    + f'<div style="width:36px;height:36px;border-radius:8px;background:{bg};display:flex;align-items:center;justify-content:center;font-size:18px;">{icon}</div>'
-                    + f'<div><div style="font-size:13px;font-weight:500;color:#1a1a2e;">{text}</div><div style="font-size:11px;color:#64748B;">{sub}</div></div>'
-                    + '</div>', unsafe_allow_html=True
-                )
+            # Card open/close split across st.markdown() calls — required because
+            # Streamlit st.button() widgets render as siblings, not children of HTML.
+            st.markdown(
+                '<div class="card">'
+                '<div class="card-title">⚡ 快捷操作</div>',
+                unsafe_allow_html=True
+            )
+            qa1, qa2 = st.columns(2)
+            with qa1:
+                if st.button("🔍 Monitor 巡检\n启动新一轮巡检", key="qa_monitor", use_container_width=True):
+                    st.session_state._pending_tab = "Monitor"
+            with qa2:
+                if st.button("📝 录入新案例\n手动录入舆情案例", key="qa_entry", use_container_width=True):
+                    st.session_state._pending_tab = "录入研判"
+            qa3, qa4 = st.columns(2)
+            with qa3:
+                if st.button(f"⚡ 案例处置\n待处理 {pending} 条", key="qa_disposition", use_container_width=True):
+                    st.session_state._pending_tab = "案例处置"
+            with qa4:
+                if st.button(f"🏴 高危追踪\n高优跟进 {p0p1} 条", key="qa_tracking", use_container_width=True):
+                    st.session_state._pending_tab = "高危追踪"
             st.markdown('</div>', unsafe_allow_html=True)
 
         # Platform distribution
         if plat:
-            st.markdown('<div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">', unsafe_allow_html=True)
-            st.markdown('<p style="font-size:15px;font-weight:600;color:#1a1a2e;margin:0 0 16px 0;">🌐 平台分布</p>', unsafe_allow_html=True)
-
-            plat_colors = {'小红书': {'bg': '#ff2442', 'abbr': '红'}, '抖音': {'bg': '#1e1e1e', 'abbr': '抖'}, 'YouTube': {'bg': '#ff0000', 'abbr': 'YT'}, '微博': {'bg': '#e6162d', 'abbr': '微'}, 'B站': {'bg': '#fb7299', 'abbr': 'B'}, '公众号': {'bg': '#07c160', 'abbr': '公'}}
-
+            plat_colors = {
+                '小红书': {'bg': '#ff2442', 'abbr': '红'},
+                '抖音': {'bg': '#1e1e1e', 'abbr': '抖'},
+                'YouTube': {'bg': '#ff0000', 'abbr': 'YT'},
+                '微博': {'bg': '#e6162d', 'abbr': '微'},
+                'B站': {'bg': '#fb7299', 'abbr': 'B'},
+                '公众号': {'bg': '#07c160', 'abbr': '公'},
+            }
+            items_html = ''
             for pf, cnt in sorted(plat.items(), key=lambda x: -x[1]):
                 info = plat_colors.get(pf, {'bg': '#64748B', 'abbr': pf[:2]})
-                pct = (cnt / max_cnt * 100) if max_cnt > 0 else 0
-                st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #f0f2f5;margin-bottom:8px;">'
-                    + f'<div style="width:32px;height:32px;border-radius:6px;background:{info["bg"]};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#fff;flex-shrink:0;">{info["abbr"]}</div>'
-                    + f'<div style="flex:1;"><div style="font-size:13px;font-weight:500;">{pf}</div>'
-                    + f'<div style="font-size:11px;color:#64748B;">{cnt} 条</div>'
-                    + f'<div style="margin-top:4px;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;"><div style="height:100%;border-radius:2px;width:{pct:.0f}%;background:{info["bg"]};"></div></div>'
-                    + '</div></div>', unsafe_allow_html=True
+                pct = int(cnt / max_cnt * 100) if max_cnt else 0
+                items_html += (
+                    f'<div class="platform-item">'
+                    f'<div class="pf-icon" style="background:{info["bg"]};">{html.escape(info["abbr"])}</div>'
+                    f'<div class="pf-info">'
+                    f'<div class="pf-name">{html.escape(pf)}</div>'
+                    f'<div class="pf-count">{cnt} 条</div>'
+                    f'<div class="pf-bar-wrap"><div class="pf-bar-fill" style="width:{pct}%;background:{info["bg"]};"></div></div>'
+                    f'</div></div>'
                 )
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="card">'
+                '<div class="card-title">🌐 平台分布</div>'
+                '<div class="platform-grid">' + items_html + '</div>'
+                '</div>',
+                unsafe_allow_html=True
+            )
 
     with side_col:
-        # Task count
         st.markdown(
-            f'<div style="background:#fff;border-radius:10px;padding:16px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:12px;">'
-            + '<p style="font-size:14px;font-weight:600;margin:0 0 12px 0;display:flex;align-items:center;gap:8px;">⏰ 待处理任务'
-            + f'<span style="font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;background:#fef0e6;color:#e65100;">{pending}</span></p>'
-            + '<ul style="list-style:none;padding:0;margin:0;">'
-            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>待标注案例</span><span style="font-weight:500;">12 条</span></li>'
-            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>待审核结果</span><span style="font-weight:500;">6 条</span></li>'
-            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:none;"><span>待跟进处置</span><span style="font-weight:500;">5 条</span></li>'
-            + '</ul></div>', unsafe_allow_html=True
+            f'<div class="sidebar-card">'
+            f'<h3>⏰ 待处理任务 <span class="badge orange">{pending}</span></h3>'
+            f'<ul class="sidebar-list">'
+            f'<li><span>待标注案例</span><span class="val">{total} 条</span></li>'
+            f'<li><span>待审核结果</span><span class="val">0 条</span></li>'
+            f'<li><span>待跟进处置</span><span class="val">{pending} 条</span></li>'
+            f'</ul></div>',
+            unsafe_allow_html=True
         )
-
-        # Today's updates
         st.markdown(
-            '<div style="background:#fff;border-radius:10px;padding:16px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:12px;">'
-            + '<p style="font-size:14px;font-weight:600;margin:0 0 12px 0;">📊 今日动态</p>'
-            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span style="width:8px;height:8px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span><span>抖音 P0 舆情爆发</span></div>'
-            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span>微博新案例待标注</span></div>'
-            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span><span>小红书巡检完成</span></div>'
-            + '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:none;"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0;"></span><span>B站案例处置完毕</span></div>'
-            + '</div>', unsafe_allow_html=True
+            f'<div class="sidebar-card">'
+            f'<h3>📊 今日动态</h3>'
+            f'<p style="font-size:12px;color:#64748B;">暂无新动态</p>'
+            f'</div>',
+            unsafe_allow_html=True
         )
-
-        # System status
         st.markdown(
-            '<div style="background:#fff;border-radius:10px;padding:16px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:12px;">'
-            + '<p style="font-size:14px;font-weight:600;margin:0 0 12px 0;">🔄 系统状态</p>'
-            + '<ul style="list-style:none;padding:0;margin:0;">'
-            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>巡检服务</span><span style="color:#16a34a;font-weight:500;">● 运行中</span></li>'
-            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:1px solid #f0f2f5;"><span>标注队列</span><span style="color:#f59e0b;font-weight:500;">● 拥堵 3</span></li>'
-            + '<li style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;border-bottom:none;"><span>数据网关</span><span style="color:#16a34a;font-weight:500;">● 正常</span></li>'
-            + '</ul></div>', unsafe_allow_html=True
+            '<div class="sidebar-card">'
+            '<h3>🔄 系统状态</h3>'
+            '<ul class="sidebar-list">'
+            '<li><span>巡检服务</span><span style="color:#16a34a;font-weight:500;">● 运行中</span></li>'
+            '<li><span>标注队列</span><span style="color:#f59e0b;font-weight:500;">● 拥堵 3</span></li>'
+            '<li><span>数据网关</span><span style="color:#16a34a;font-weight:500;">● 正常</span></li>'
+            '</ul></div>',
+            unsafe_allow_html=True
         )
 # Tab routing — match by label string, not index (TAB_LABELS varies by role)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if active_tab == "📊 总览":
+if active_tab == "总览":
     _render_overview()
-elif active_tab == "📡 Monitor":
+elif active_tab == "Monitor":
     render_tab3()
-elif active_tab == "📝 录入研判":
+elif active_tab == "录入研判":
     render_tab_entry()
-elif active_tab == "📋 案例处置":
+elif active_tab == "案例处置":
     render_tab4()
-elif active_tab == "📚 知识库":
+elif active_tab == "知识库":
     render_tab_knowledge()
-elif active_tab == "📊 报告":
+elif active_tab == "报告":
     render_tab6()
-elif active_tab == "⚠️ 高危追踪":
+elif active_tab == "高危追踪":
     render_tab_tracking()
-elif active_tab == "⚙️ 设置":
-    render_tab_settings()
+elif active_tab == "设置":
+    import ui.tab_settings as _ts
+    from importlib import reload as _reload
+    _reload(_ts)
+    _ts.render_tab_settings()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 显式重跑：确保标注完成后页面刷新到最新结果
