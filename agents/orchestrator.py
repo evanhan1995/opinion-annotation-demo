@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 舆情指挥系统 — Orchestrator
 Pipeline coordinator and the ONLY component allowed to pass data between Agents.
@@ -13,7 +13,6 @@ P0/P1熔断 (PRD §3.6):
   Analyst returns P0/P1 → Orchestrator immediately triggers emergency_dispatch()
   before the rest of the pipeline continues.
 """
-import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -76,53 +75,26 @@ def _dispatch_emergency(annotation: Annotation) -> bool:
         except Exception as e:
             _log.warning("Desktop alert failed: %s", e)
 
-    # Webhook dispatch
-    notif_config_path = PROJECT_ROOT / "notification_config.json"
-    if notif_config_path.exists():
-        try:
-            cfg = json.loads(notif_config_path.read_text(encoding="utf-8"))
-            for wh in cfg.get("webhooks", []):
-                if not wh.get("enabled"):
-                    continue
-                levels = wh.get("trigger_level", "P0")
-                if severity in levels.replace("+", " ").split() if "P0+P1" in levels else [severity]:
-                    # Allow P0+P1 format
-                    pass
-                if ("P0" in levels and severity == "P0") or ("P1" in levels and severity == "P1"):
-                    _send_webhook(wh["url"], annotation)
-                    triggered = True
-        except Exception as e:
-            _log.warning("Webhook dispatch failed: %s", e)
-    return triggered
-
-
-def _send_webhook(url: str, annotation: Annotation):
-    """Send emergency alert to Feishu/WeCom webhook."""
+    # Webhook dispatch — send only to webhooks whose trigger_level covers severity
     try:
-        import requests
+        from shared.notify import send_severity_card
         title = annotation.summary[:100] if annotation.summary else "无标题"
         tags_str = ", ".join(annotation.risk_tags) if annotation.risk_tags else "无"
-
-        payload = {
-            "msg_type": "interactive",
-            "card": {
-                "header": {
-                    "title": {"tag": "plain_text", "content": f"舆情{annotation.severity}告警"},
-                    "template": "red" if annotation.severity == "P0" else "yellow",
-                },
-                "elements": [
-                    {"tag": "markdown", "content": f"**{title}**"},
-                    {"tag": "markdown",
-                     "content": f"平台: {annotation.platform} | 风险: {tags_str}"},
-                    {"tag": "markdown",
-                     "content": f"分流建议: {annotation.triage}"},
-                    {"tag": "markdown", "content": f"[查看原文]({annotation.url})"},
-                ],
-            },
-        }
-        requests.post(url, json=payload, timeout=10)
-    except Exception:
-        pass
+        body = (
+            f"**{title}**\n\n"
+            f"平台: {annotation.platform} | 风险: {tags_str}\n"
+            f"分流建议: {annotation.triage}\n"
+            f"[查看原文]({annotation.url})"
+        )
+        sent = send_severity_card(
+            title=f"舆情{annotation.severity}告警",
+            body_text=body,
+            severity=annotation.severity,
+        )
+        triggered = triggered or sent > 0
+    except Exception as e:
+        _log.warning("Webhook dispatch failed: %s", e)
+    return triggered
 
 
 # ── Scraper degradation tracking (PRD S-06) ────────────────────────────

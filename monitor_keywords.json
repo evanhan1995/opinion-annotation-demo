@@ -1,0 +1,33 @@
+{
+  "keywords": [
+    {
+      "id": "kw001",
+      "keyword": "演语科技",
+      "platforms": [
+        "douyin",
+        "bilibili",
+        "wechat"
+      ],
+      "result_count": 10,
+      "fetch_mode": "default",
+      "active": true,
+      "notes": ""
+    },
+    {
+      "id": "kw002",
+      "keyword": "Liblib",
+      "platforms": [
+        "douyin",
+        "bilibili",
+        "wechat"
+      ],
+      "result_count": 10,
+      "fetch_mode": "default",
+      "active": true,
+      "notes": ""
+    }
+  ],
+  "defaults": {
+    "result_count": 30
+  }
+}

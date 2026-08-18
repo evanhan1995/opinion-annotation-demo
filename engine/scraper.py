@@ -535,7 +535,8 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
     result["互动数据"] = f"回复{replies}, 转发{retweets}, 点赞{likes}, 查看{views}"
     result["发布时间"] = post_time
     result["社媒数据"] = {"作者": author, "国家": "", "点赞": _parse_int(likes),
-                          "评论": _parse_int(replies), "粉丝": 0,
+                          "评论": _parse_int(replies), "收藏": 0,
+                          "转发": _parse_int(retweets), "粉丝": 0,
                           "播放量": _parse_int(views), "作者主页": []}
 
     return result

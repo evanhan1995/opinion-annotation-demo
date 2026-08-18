@@ -194,6 +194,29 @@ def render_tab_settings():
                     key=f"settings_wh_enabled_{i}",
                 )
 
+    # ── Webhook self-test ──────────────────────────────────────────
+    if st.button("📨 发送测试消息", key="settings_notify_test", use_container_width=True):
+        urls = []
+        for i in range(len(webhooks)):
+            url = st.session_state.get(f"settings_wh_url_{i}", "").strip()
+            if url and st.session_state.get(f"settings_wh_enabled_{i}", True):
+                urls.append(url)
+        if not urls:
+            st.error("请先填写并启用至少一个 Webhook URL")
+        else:
+            from shared.notify import send_feishu_card
+            sent = send_feishu_card(
+                title="飞书同步测试",
+                body_text="这是一条来自舆情智能标注系统的测试消息。",
+                fields={"状态": "OK", "来源": "系统设置"},
+                level="info",
+                webhook_urls=urls,
+            )
+            if sent > 0:
+                st.success(f"测试消息已发送到 {sent} 个 Webhook，请查看飞书群。")
+            else:
+                st.error("发送失败：请检查 Webhook URL，或查看项目日志中的详细错误。")
+
     # ── Save button ────────────────────────────────────────────────
     if st.button("💾 保存设置", type="primary", use_container_width=True, key="settings_save"):
         if not api_key.strip():
@@ -233,6 +256,8 @@ def render_tab_settings():
                     "enabled": st.session_state.get(f"settings_wh_enabled_{i}", True),
                     "trigger_level": st.session_state.get(f"settings_wh_trigger_{i}", "P0"),
                 })
+        if any("YOUR_WEBHOOK_TOKEN" in h.get("url", "") for h in new_notif["webhooks"]):
+            st.warning("检测到占位 Webhook URL（YOUR_WEBHOOK_TOKEN），已保存但不会发送成功，请替换为真实飞书机器人地址。")
         _save_notif_config(new_notif)
 
         st.session_state.config = new_engine

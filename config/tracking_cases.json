@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "track-001",
+      "url": "https://www.douyin.com/user/MS4wLjABAAAAgY4yP_H4zp8E88MIEWje9wE-zHfM145z3Hu2rBQUudQ?from_tab_name=main&modal_id=7665357897778017969&vid=7661129422434632945",
+      "label": "裁员舆情",
+      "platform": "抖音",
+      "interval_minutes": 15,
+      "alerts": [
+        {
+          "metric": "comments",
+          "threshold": 0.5
+        },
+        {
+          "metric": "likes",
+          "threshold": 0.5
+        },
+        {
+          "metric": "shares",
+          "threshold": 0.5
+        }
+      ],
+      "enabled": true,
+      "created_at": "2026-08-14T08:41:57.640352"
+    },
+    {
+      "id": "track-002",
+      "url": "https://www.douyin.com/user/MS4wLjABAAAAgY4yP_H4zp8E88MIEWje9wE-zHfM145z3Hu2rBQUudQ?from_tab_name=main&modal_id=7661129422434632945&vid=7661129422434632945",
+      "label": "失眠飞行",
+      "platform": "抖音",
+      "interval_minutes": 15,
+      "alerts": [
+        {
+          "metric": "comments",
+          "threshold": 0.5
+        },
+        {
+          "metric": "likes",
+          "threshold": 0.5
+        },
+        {
+          "metric": "shares",
+          "threshold": 0.5
+        }
+      ],
+      "enabled": true,
+      "created_at": "2026-08-14T08:44:10.372750"
+    },
+    {
+      "id": "track-003",
+      "url": "https://www.douyin.com/jingxuan?modal_id=7672428936793443599",
+      "label": "测试",
+      "platform": "抖音",
+      "interval_minutes": 15,
+      "alerts": [
+        {
+          "metric": "comments",
+          "threshold": 0.5
+        },
+        {
+          "metric": "likes",
+          "threshold": 0.5
+        },
+        {
+          "metric": "shares",
+          "threshold": 0.5
+        }
+      ],
+      "enabled": true,
+      "created_at": "2026-08-14T09:20:48.521573"
+    }
+  ]
+}

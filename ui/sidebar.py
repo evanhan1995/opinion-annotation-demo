@@ -451,7 +451,11 @@ def render_sidebar(_patrol_pending: bool):
         st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
         patrol_urls_file = ENGINE_DIR / "monitored_urls.json"
         if patrol_urls_file.exists():
-            patrol_urls = _json.loads(patrol_urls_file.read_text(encoding="utf-8"))
+            try:
+                raw = patrol_urls_file.read_text(encoding="utf-8").strip()
+                patrol_urls = _json.loads(raw) if raw else []
+            except _json.JSONDecodeError:
+                patrol_urls = []
             if st.button(f"📡 立即巡检 ({len(patrol_urls)} 链接)", use_container_width=True, key="patrol_btn"):
                 st.session_state._patrol_pending = True
                 st.rerun()

@@ -275,6 +275,8 @@ def _format_note_card(note: dict, url: str) -> dict:
             "国家": ip_location,
             "点赞": likes_int,
             "评论": int(commented) if str(commented).isdigit() else 0,
+            "收藏": int(collected) if str(collected).isdigit() else 0,
+            "转发": int(shared) if str(shared).isdigit() else 0,
             "粉丝": 0,
             "播放量": estimated_views,
             "作者主页": [f"https://www.xiaohongshu.com/user/profile/{user_id}"],

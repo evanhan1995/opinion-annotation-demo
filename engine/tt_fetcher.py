@@ -337,6 +337,8 @@ def _format_douyin_metadata(raw: dict, video_id: str) -> dict:
             "国家": "",
             "点赞": likes_int,
             "评论": int(comment_cnt) if str(comment_cnt).isdigit() else 0,
+            "收藏": int(collect) if str(collect).isdigit() else 0,
+            "转发": int(share) if str(share).isdigit() else 0,
             "粉丝": int(followers) if str(followers).isdigit() else 0,
             "播放量": int(play) if str(play).isdigit() else None,
             "作者主页": [f"https://www.douyin.com/user/{sec_uid}" if sec_uid else ""],

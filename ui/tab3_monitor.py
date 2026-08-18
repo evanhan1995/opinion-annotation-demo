@@ -27,7 +27,14 @@ def render_tab3():
         if cached is not None:
             return cached
         if keywords_path.exists():
-            cfg = json.loads(keywords_path.read_text(encoding="utf-8-sig"))
+            raw = keywords_path.read_text(encoding="utf-8-sig").strip()
+            if raw:
+                try:
+                    cfg = json.loads(raw)
+                except json.JSONDecodeError:
+                    cfg = {"keywords": [], "defaults": {"result_count": 30}}
+            else:
+                cfg = {"keywords": [], "defaults": {"result_count": 30}}
         else:
             cfg = {"keywords": [], "defaults": {"result_count": 30}}
         st.session_state.monitor_cfg = cfg

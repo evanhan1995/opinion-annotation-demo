@@ -9,11 +9,14 @@
 """
 
 import json
+import logging
 import os
 import re
 import time
 from datetime import datetime, date
 from pathlib import Path
+
+_log = logging.getLogger("yuqing")
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
@@ -178,6 +181,26 @@ def ingest(
             similar_cases.append({"path": s["path"], "score": s["score"]})
     except Exception:
         pass
+
+    # Notify Feishu when a new pending case enters the library
+    if init_status == "待跟进":
+        try:
+            from shared.notify import send_new_pending_case_card
+            social = scraped_data.get("社媒数据", {}) or {}
+            if not isinstance(social, dict):
+                social = {}
+            case_url = url or str(scraped_data.get("原文链接", ""))
+            sent = send_new_pending_case_card(
+                url=case_url,
+                comments=social.get("评论", 0),
+                likes=social.get("点赞", 0),
+                collects=social.get("收藏", 0),
+                shares=social.get("转发", 0),
+            )
+            if sent == 0:
+                _log.warning("飞书新案例通知未送达（0 个 webhook 接受），case_url=%s", case_url[:60])
+        except Exception as e:
+            _log.exception("飞书新案例通知发送异常: %s", e)
 
     return {
         "action": "case_generated",
