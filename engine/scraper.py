@@ -777,11 +777,14 @@ def _scrape_weibo(url: str, timeout: int = 30000) -> dict:
 
 
 def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
-    """Scrape 微信公众号 article — Playwright + stealth to bypass anti-bot.
+    """Scrape 微信公众号 article.
 
-    Handles direct mp.weixin.qq.com/s?... URLs. Sogou redirect URLs
-    (weixin.sogou.com/link?url=...) require search context and should be
-    scraped during Monitor search via _resolve_sogou_url() instead.
+    WeChat articles are only reliably fetchable during the Sogou→WeChat
+    redirect session (the permanent-link `sn` signature is withheld from the
+    page, so a re-fetched permanent URL returns "参数错误").  Monitor extracts
+    the full article in-session and caches it via engine.wechat_fetcher; serve
+    that cache first.  A live Playwright fetch is attempted only as a fallback
+    for URLs that arrive from outside the Monitor search flow.
     """
     from engine.browser_pool import get_shared_browser, new_context, BROWSER_ARGS
 
@@ -797,6 +800,15 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
     if is_sogou:
         return _error("搜狗跳转链接需从Monitor搜索时抓取，请通过Monitor搜索结果查看发布时间等信息")
 
+    # ── Tier 1: in-session cache (filled by Monitor's _resolve_sogou_url) ──
+    try:
+        from engine.wechat_fetcher import get_cached_article
+        cached = get_cached_article(url)
+        if cached:
+            return cached
+    except Exception:
+        pass
+
     ctx = page = None
     try:
         browser, _pw = get_shared_browser()
@@ -808,13 +820,21 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
         )
         page = ctx.new_page()
         page.goto(url, timeout=min(timeout, 30000), wait_until="domcontentloaded")
-        page.wait_for_selector("#js_content, #activity-name", timeout=10000)
+        try:
+            page.wait_for_selector("#js_content, #activity-name", timeout=10000)
+        except Exception:
+            # The selector may time out because the URL is incomplete (missing
+            # sn) or anti-bot blocked. Fall through to inspect the body text
+            # below so we report the real reason instead of a raw Timeout.
+            pass
 
         body_text = page.inner_text("body")[:500]
         if "参数错误" in body_text or "param error" in body_text.lower():
             return _error("参数错误：URL不完整或已过期，可能缺少sn参数")
         if "antispider" in page.url.lower() or "请在微信客户端" in body_text:
             return _error("微信反爬拦截：请在微信中打开文章，将链接复制后重试")
+        if "该内容已被发布者删除" in body_text or "此内容因违规无法查看" in body_text:
+            return _error("文章已被删除或违规无法查看")
 
         # Title
         title = ""

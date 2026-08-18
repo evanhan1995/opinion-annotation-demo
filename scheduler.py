@@ -294,28 +294,9 @@ def _wrapped_run_daily():
     try:
         path = run_daily_report()
         _scheduler_status["last_daily"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Push daily report notification to Feishu
-        try:
-            from shared.notify import send_feishu_card
-            from agents.curator import query_stats
-            stats = query_stats()
-            sev = stats.get("severity_dist", {})
-            today = datetime.now().strftime("%Y-%m-%d")
-            send_feishu_card(
-                title=f"舆情日报 — {today}",
-                body_text=(
-                    f"**总案例**: {stats.get('total_cases', 0)} 条\n"
-                    f"**P0**: {sev.get('P0', 0)}  **P1**: {sev.get('P1', 0)}  "
-                    f"**P2**: {sev.get('P2', 0)}  **P3**: {sev.get('P3', 0)}"
-                ),
-                fields={
-                    "平台数": str(stats.get("platform_count", 0)),
-                    "P0/P1": f"{sev.get('P0', 0)}/{sev.get('P1', 0)}",
-                },
-                level="info",
-            )
-        except Exception:
-            pass
+        # Feishu push now lives in Orchestrator.run_daily_report() so that the
+        # manual UI button and CLI paths push too. Do NOT push here again —
+        # that would double-notify on the scheduled path.
     except Exception as e:
         _scheduler_status["errors"].append(f"日报失败: {e}")
 

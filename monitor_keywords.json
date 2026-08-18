@@ -2,26 +2,11 @@
   "keywords": [
     {
       "id": "kw001",
-      "keyword": "演语科技",
+      "keyword": "字节避雷",
       "platforms": [
-        "douyin",
-        "bilibili",
         "wechat"
       ],
-      "result_count": 10,
-      "fetch_mode": "default",
-      "active": true,
-      "notes": ""
-    },
-    {
-      "id": "kw002",
-      "keyword": "Liblib",
-      "platforms": [
-        "douyin",
-        "bilibili",
-        "wechat"
-      ],
-      "result_count": 10,
+      "result_count": 5,
       "fetch_mode": "default",
       "active": true,
       "notes": ""

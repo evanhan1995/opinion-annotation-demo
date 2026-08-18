@@ -43,9 +43,29 @@ Windows 11 + Python 3.14
 ### yt-dlp 评论上限
 - `max_comments=["50"]` 已配置在 scraper.py 中，不可删除
 
+### 微信公众号必须「会话内即时抓取」（不可回退为解析永久链接）
+- 微信文章永久链接 = `__biz + mid + idx + sn` 四参数签名；搜狗跳转后 `sn` 不暴露在页面（`window.sn` 为空、HTML 无 `sn` 值），缺 `sn` 即「参数错误」。
+- 旧的 `_extract_permanent_url`（解析永久链接）方向本身不可行，已删除。不要重新实现「拼 __biz 永久链接」的路子。
+- 正确链路：`monitor` 的 wechat 分支在搜狗→微信跳转会话内，用 `_extract_wechat_page()` 当场提取正文四要素，写入 `engine/wechat_fetcher._ARTICLE_CACHE`；下游 `engine/scraper._scrape_wechat` 走 `get_cached_article()` 优先命中缓存。
+- 缓存是**进程内内存**，进程退出即失效——「monitor 搜完立刻走 pipeline」可用；「存 Excel 下次进程再手动提交 URL」会回退到 Playwright 兜底（对过期临时链接仍失败）。这是微信反爬硬约束，非 bug。
+- 公众号平台打破了「monitor 只搜链接、scraper 抓详情」的职责隔离——微信不允许延迟抓取，属刻意例外。
+
 ### JSON 配置文件 schema 容错
 - `notification_config.json` webhooks 可能是字符串而非字典，需 isinstance 守卫
 - `json.dumps(ensure_ascii=False)` 否则中文变 `\uXXXX`
+
+### 飞书「立即处理」告警 — 两条独立路径
+- 「分流建议 = 立即处理」需触发红色 error 级飞书告警（`shared/notify.send_urgent_disposal_card`），不是蓝色 info。
+- **A 场景（新 URL 首次入库）**：`engine/ingestor.py` 的 ingest 通知段按 `annotation_result["分流建议"]` 分流——`立即处理` → urgent 红色告警；其他 → `send_new_pending_case_card` 蓝色卡片。
+- **B 场景（已入库案例纠偏改成立即处理）**：`engine/correction_handler.py` 的 `handle_correction` 在 `"分流建议" in diffs` 且改后值为「立即处理」时触发 `_notify_urgent_disposal`。
+- 两条路径独立、互不覆盖：ingest 有 dedup 早退（已存在 URL 走不到通知段），纠偏路径不经过 ingest。改其中一条时不要假设另一条会自动跟随。
+- 防重复：B 场景仅在「分流建议」字段确实变更时触发，AI 本就判立即处理时不会重复告警。
+
+### 日报飞书推送 — 单一来源 + 当日口径 + 情感字段
+- 日报飞书推送的**唯一来源**是 `agents/orchestrator.py::_push_daily_report_feishu`，由 `run_daily_report()` 调用。scheduler 不得再单独推（会双推）。
+- 卡片内容由 `agents/daily_report.py::build_daily_feishu_summary()` 从**当日** `ReportData`（`_collect_report_data(date_str)`）构造，数字必须与日报本体一致——不要用裸 `query_stats()`（那是全库累计口径）。
+- **sentiment 字段**：case frontmatter 需写 `sentiment:`（`engine/ingestor.py::_generate_auto_case` 负责）；存量老 case 由 `agents/curator.py::_parse_case_frontmatter` 从正文「情感分析.整体情感」正则兜底解析。`query_stats` 的 `sentiment_dist` 必须含「混合」键，否则漏算。
+- 推送失败只记 `_log.warning`（`_log = logging.getLogger("yuqing")`），不阻断日报生成。
 
 ### 测试先跑
 - 代码修改后必须 `python -m pytest tests/ -x -q`

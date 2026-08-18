@@ -1,156 +1,75 @@
 # 舆情标注系统 —— 深化设计方案
 
-> 版本: v2.0.0 | 日期: 2026-05-23 | 状态: PRD Phases 1-5 全部完成（6-Agent 舆情指挥系统）
+> 版本: v2.1.0 | 日期: 2026-08-19 | 状态: 6-Agent 舆情指挥系统 + 6 搜索平台 + 飞书告警/日报推送完成
 
 ---
 
-## 1. 当前状态 (v1.2.0)
+## 1. 当前状态
 
 ### 1.1 已完成
 
-**旧管线 (engine/)**：
-```
-用户输入 URL 或手动粘贴
-  → scraper.py（5平台 + 通用回退）✅
-  → raw/cases/ 落盘 ✅
-  → annotate.py（LLM 标注 + 流式输出 + 动态案例回灌）✅
-  → outputs/ 落盘 ✅
-  → ingestor.py（Wiki 案例生成 + 三维索引 + 归档 + 跨条目关联）✅
-  → raw/archive/ 归档 ✅
-  → correction_handler.py（人工纠偏 → 校准案例）✅
-  → agent.py（扫地僧：知识库问答）✅
-  → linker.py（跨平台关联检测）✅
-  → Web UI（5 Tab：手工录入 / URL抓取 / 知识库🔒 / 扫地僧 / 操作演示）✅
-```
-
-**新架构 (agents/)** — PRD v1.2 6-Agent 舆情指挥系统：
+**新架构 (agents/)** — 6-Agent 舆情指挥系统：
 ```
 Orchestrator 编排 4 条流:
   流A: URL → Scraper → Analyst → [P0/P1熔断] → Handler → Curator ✅
-  流B: Monitor(定时巡检) → for each → 流A ✅
-  流C: Curator.query → Daily Report(日报/月报) ✅
+  流B: Monitor(定时巡检×6平台) → for each → 流A + P0/P1熔断 ✅
+  流C: Curator.query → Daily Report(日报/月报) → 飞书推送 ✅
   流D: KB Q&A(扫地僧) ✅
 
 Agent 矩阵:
-  Monitor   — 关键词双维度搜索(YouTube/抖音/XHS) + Excel导出 + SEO快照 ✅
-  Scraper   — 三平台抓取 + 人工喂料降级 ✅
+  Monitor   — 关键词×6平台搜索(douyin/youtube/xhs/bilibili/weibo/wechat) + Excel + SEO快照 ✅
+  Scraper   — 10平台抓取 + 人工喂料降级 ✅
   Analyst   — DeepSeek标注 + 相关性判定 + 流式输出 ✅
-  Handler   — 5状态机 + DeepSeek处置方案 + 时间线记录 ✅
-  Curator   — KB入库/索引/状态同步/问答 ✅
-  Daily Rpt — LLM日报/月报 + 模板fallback ✅
-  
+  Handler   — 5状态机 + 处置方案 + 时间线记录 ✅
+  Curator   — KB入库/索引/状态同步/问答/sentiment兜底 ✅
+  Daily Rpt — LLM日报/月报 + 模板fallback + 飞书摘要 ✅
+  Sentinel  — 预筛选（spam/ad 拦截，v6.0） ✅
+  Forum     — 跨校验（contradiction 检测） ✅
+
 Scheduler: 日报21:07 / 月报1日09:03 / 巡检每6h ✅
-Notifications: P0/P1 PowerShell弹窗 + 系统音效 + Webhook ✅
-Streamlit: 8 Tab (新增 Monitor / 案例处置 / 报告) + 人工喂料UI ✅
+Notifications: P0/P1弹窗+音效+飞书卡片（熔断/立即处理A+B/日报） ✅
+Streamlit: 8 Tab + 人工喂料UI ✅
 ```
+
+**平台覆盖**：
+- 搜索 6 平台：douyin / youtube / xiaohongshu / bilibili / weibo / wechat
+- 抓取 10 平台：YouTube / 小红书 / 抖音 / B站 / 微博 / 微信公众号 / Reddit / X / Instagram / TikTok（后 4 预留）
+
+**微信公众号会话内即时抓取**（2026-08 修复「参数错误」）：
+- 永久链接 `__biz + mid + idx + sn` 四参数签名，`sn` 不暴露 → 缺 `sn` 即「参数错误」
+- 方案：monitor 搜狗→微信跳转会话内用 `_extract_wechat_page` 即时抓正文 → `_ARTICLE_CACHE` → 下游 `_scrape_wechat` 优先读缓存
+
+**飞书通知体系**（2026-08 完善）：
+- P0/P1 熔断告警（`send_severity_card`）
+- 「立即处理」A 场景（`ingestor` 新 URL 入库）+ B 场景（`correction_handler` 纠偏）
+- 日报推送（`orchestrator` 单一来源，当日口径 + 情感分布）
 
 ### 1.2 代码规模
 
-**engine/ (旧管线 — 被 agents/ 包裹)**：
-
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `engine/annotate.py` | 844 | LLM 标注引擎 |
-| `engine/xhs_fetcher.py` | 590 | 小红书双通道抓取 |
-| `engine/scraper.py` | 505 | 多平台抓取调度 |
-| `engine/ingestor.py` | 520 | 自动 Ingest 管线 |
-| `engine/agent.py` | 331 | 扫地僧问答引擎 |
-| `engine/tt_fetcher.py` | 313 | 抖音抓取器 |
-| `engine/linker.py` | 312 | 跨平台关联检测 |
-| `engine/correction_handler.py` | 266 | 人工纠偏处理器 |
-| `engine/index_mgr.py` | 265 | 共享索引管理器 |
-| `engine/debug_xhs.py` | — | Cookie 诊断脚本 |
-
-**agents/ (新架构 — 6-Agent 舆情指挥系统)**：
-
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `agents/orchestrator.py` | ~370 | 4条流编排 + P0/P1熔断 + 状态同步 |
-| `agents/monitor.py` | ~500 | 三平台搜索 + Excel + SEO快照 |
-| `agents/analyst.py` | ~140 | DeepSeek标注 + 相关性判定 |
-| `agents/curator.py` | ~260 | KB入库/索引/状态同步/问答 |
-| `agents/handler.py` | ~120 | 5状态机 + DeepSeek处置方案 |
-| `agents/daily_report.py` | ~270 | LLM日报/月报 + 模板fallback |
-| `agents/scraper.py` | ~130 | 三平台抓取门面 + 人工喂料 |
-| `agents/shared.py` | 178 | 模型工厂 + dataclass + JSON工具 |
-
-**ui/ (Streamlit)**：
-
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `app.py` | ~370 | 8 Tab入口 + 人工喂料UI |
-| `ui/shared.py` | 596 | 共享渲染函数 |
-| `ui/sidebar.py` | 158 | 侧边栏 |
-| `ui/tab2_url.py` | 180 | URL 抓取 |
-| `ui/tab1_manual.py` | 117 | 手工录入 |
-| `ui/tab3_monitor.py` | ~65 | **新增** — Monitor 仪表板 |
-| `ui/tab4_disposition.py` | ~90 | **新增** — 案例处置 |
-| `ui/tab6_reports.py` | ~60 | **新增** — 报告查看 |
-| `ui/tab5_demo.py` | 124 | 操作演示 |
-
-**基础设施**：
-
-| 文件 | 职责 |
-|------|------|
-| `scheduler.py` | **新增** — 定时调度器 (日报21:07/月报09:03/巡检每6h) |
-| `monitor_keywords.json` | 关键词+品牌词配置 |
-| `notification_config.json` | P0/P1 Webhook 配置 |
-| `prompts/` (4文件) | Agent System Prompt 独立存放 |
-
-**测试：8 文件 111 测试全通过**
+- ~24,000 行 Python（10 agent 模块 + 25 engine 模块）
+- 22 测试文件，318 测试（1 预存失败 `test_sentiment_ml`，与业务无关）
+- 110 Wiki 案例 + 72 作者页 + 词表/向量/日报月报
 
 ### 1.3 知识库资产
 
 | 目录 | 数量 | 说明 |
 |------|------|------|
-| `wiki/cases/` | 18 个案例 | P0×1, P1×4, P2×9, P3×4 — 含抖音+小红书新增 |
-| `wiki/authors/` | 5 个作者 | 跨平台作者聚合页 |
-| `wiki/concepts/` | 5 篇 | 严重度/情感/分流/真实性/平台 |
-| `wiki/entities/` | 2 篇 | Meltwater / 新浪舆情通 |
-| `wiki/sources/` | 2 篇 | Evan 的 TEMU + DJI 复盘 |
-| `wiki/syntheses/` | 1 篇 | 标注规范活文档 |
-| `raw/cases/` | 7 个文件 | 待处理原始抓取 |
-| `raw/archive/` | 7 个文件 | 已处理归档 |
-| `outputs/` | 7 个文件 | 标注结果存档 |
+| `wiki/cases/` | 110 个案例 | P0×1, P1×16, P2×2, P3×91，按平台分 5 子目录 |
+| `wiki/authors/` | 72 个作者 | 跨平台作者聚合页 |
+| `wiki/taxonomy/` | 4 文件 | 叙事分类/风险标签/处置动作/候选标签 |
+| `wiki/reports/` | daily + monthly | 日报/月报 |
+| `wiki/embeddings/` | 1 文件 | 语义检索向量（59 条） |
 
-### 1.4 Phase 18 变更
+### 1.4 最近一轮工作（2026-08）
 
-| # | 问题 | 修复 |
-|---|------|------|
-| 1 | index.md Wiki 链接格式损坏 | `_split_table_cells()` protect-split-restore |
-| 2 | P1 严重度盲区 | case-010 + 用户自建 case-012 |
-| 3 | 去重全文件扫描 | frontmatter `url:` 字段匹配 |
-| 4 | 标注结果残留在扫地僧 Tab | `_render_annotation_result()` 移入 Tab1/Tab2 |
-| 5 | Tab1/Tab2 widget key 重复 | 13 个组件 `key_prefix` 前缀 |
-| 6 | 分流建议维度从不更新 | `_update_case_index()` 新增 action 维度 |
-| 7 | 平台字段总是 `?` | 从 scraped_data 取而非 annotation_result |
-| 8 | correction_handler 独立 index 逻辑 | 统一到 `index_mgr.py` |
-| 9 | session_state 初始化顺序 | 先 init 再用，demo_guide_shown 纳入统一初始化 |
-| 10 | 知识库密码保护缺失 | 三级密码源：st.secrets → os.getenv → config.json |
-
-### 1.5 性能优化轮次 (2026-05-14)
-
-| # | 问题 | 修复 |
-|---|------|------|
-| 11 | yt-dlp 抓取 7,626 评论视频耗时 171s | `max_comments=["50"]` 限制评论数，降至 3s |
-| 12 | Playwright 无条件 `wait_for_timeout(2-3s)` | 改为 `wait_for_selector` 按内容就绪触发 |
-| 13 | 连续标注第二个 URL 页面残留旧结果 | deferred annotation 模式：按钮先清空再委托下次运行 |
-| 14 | `build_system_prompt()` 每次标注重读 21 文件 | 缓存在 `st.session_state.cached_system_prompt` |
-| 15 | `st.rerun()` 在 button handler 内部双层重跑竞态 | 回退延迟 ingest，改为脚本末 `_needs_rerun` 单次 gate |
-| 16 | 扫地僧不支持跨平台查询 | AGENT_SYSTEM_PROMPT 新增跨平台引导 + `build_agent_context` synthesis 自动展开关联案例 |
-| 17 | 边界盲区仅显示 flag 无行动建议 | `_generate_boundary_suggestion()` 生成 Draft PR 式修改建议，UI 以 diff 格式呈现 |
-| 18 | overview 行用 f-string 硬拼接 | `_parse_row_to_dict()`/`_dict_to_row()` 结构化构建，header 已知常量 |
-| 19 | 只能逐条标注，无批量入口 | Tab2 新增批量模式（checkbox + text_area + 进度条 + 摘要表） |
-| 20 | 无标注历史，无法对比变化 | `find_annotation_history` + `diff_annotations` + 时间线 expander |
-| 21 | 无监控/巡检能力 | `monitored_urls.json` + 侧边栏巡检按钮 + P0/P1 计数 |
-| 22 | P0/P1 案例无醒目提示 | 标注结果顶部 error(红)/warning(黄) 横幅 + 三要素 |
-
-### 1.6 架构债务
-
-| # | 问题 | 严重度 | 计划 |
-|---|------|--------|------|
-| 1 | ingestor 字符串拼接维护 Markdown 表格 | 中 | 案例 >50 时结构化（当前 13 无需） |
-| 2 | ~~app.py 近千行单文件~~ | ~~低~~ | ✅ Phase 17a 完成：302 行入口 + 5 个 ui/ 模块 |
+| # | 内容 |
+|---|------|
+| 1 | 微信公众号「参数错误」→ 会话内即时抓取 + 缓存 |
+| 2 | 飞书「立即处置」A 场景（ingest）+ B 场景（纠偏）告警 |
+| 3 | 日报飞书推送（手动/定时/CLI 全覆盖 + 当日口径 + 情感字段修复） |
+| 4 | sentiment 统计修复（frontmatter 写入 + 存量兜底 + 「混合」键） |
+| 5 | 死代码清理（fetch_wechat_article / _error） |
+| 6 | case 数据核查（110 条自洽，无残留） |
 
 ---
 

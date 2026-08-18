@@ -9,7 +9,6 @@ Design:
   - One LLM call per report, flat JSON, retry once on validation failure.
   - MD and HTML render from the same IR — single source of truth.
 """
-import io
 import json
 import sys
 from dataclasses import dataclass, field
@@ -17,8 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-if sys.stdout and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WIKI_DIR = PROJECT_ROOT / "wiki"

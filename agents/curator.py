@@ -276,6 +276,12 @@ def _parse_case_frontmatter(filepath: Path) -> dict:
         # ingestor writes `created`, curator queries `ingested_at` — bridge them
         if not result["ingested_at"] and result["created"]:
             result["ingested_at"] = result["created"]
+        # sentiment 兜底：存量 case 的 frontmatter 无 sentiment 字段，从正文 AI
+        # 标注 JSON 的「情感分析.整体情感」解析（新 case 由 ingestor 直接写入）。
+        if not result["sentiment"] and len(parts) >= 3:
+            m = re.search(r'"整体情感"\s*:\s*"([^"]+)"', parts[2])
+            if m:
+                result["sentiment"] = m.group(1).strip()
     except Exception:
         pass
     return result
@@ -328,7 +334,7 @@ def query_stats(date_from: str = "", date_to: str = "") -> dict:
     platform_dist, status_dist, top_categories, p0_p1_list, narrative_dist.
     """
     severity_dist = {"P0": 0, "P1": 0, "P2": 0, "P3": 0}
-    sentiment_dist = {"正面": 0, "中性": 0, "负面": 0}
+    sentiment_dist = {"正面": 0, "中性": 0, "负面": 0, "混合": 0}
     platform_dist: dict[str, int] = {}
     status_dist = {"待跟进": 0, "处理中": 0, "已处理": 0, "已放弃": 0, "忽略": 0}
     categories: dict[str, int] = {}

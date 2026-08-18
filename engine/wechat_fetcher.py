@@ -1,20 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-WeChat (微信公众号) article search + fetch.
+WeChat (微信公众号) article search + in-session fetch.
 
 Search: Playwright + stealth.js → weixin.sogou.com (public, no login needed)
-Fetch:  requests + BeautifulSoup → mp.weixin.qq.com (public article pages)
+Fetch:  in-session extraction via _resolve_sogou_url → cached for Scraper.
+        (A direct requests-based fetch is not viable — WeChat returns a
+        captcha wall to unauthenticated requests, and the permanent-link `sn`
+        signature is never exposed to the page. See CLAUDE.md.)
 
 Architecture:
   search_wechat_articles(keyword) → Sogou WeChat search → article URL list
-  fetch_wechat_article(url) → requests + BS4 → standardized dict
+  _resolve_sogou_url() → in-session article extraction → _ARTICLE_CACHE
+  get_cached_article() → served by engine.scraper._scrape_wechat
 """
 
 import io
 import sys
 import re
-import time
-import threading
 import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -155,172 +157,37 @@ def search_wechat_articles(keyword: str, count: int = 20, sort_type: str = "hot"
     return results[:count]
 
 
-def _extract_permanent_url(page) -> str:
-    """Extract the permanent article URL (with __biz) from a loaded WeChat page.
+# In-session article cache.  mp.weixin.qq.com articles are only reliably
+# fetchable during the Sogou→WeChat redirect session: the permanent-link `sn`
+# signature is never surfaced to the page (only `__biz`/`mid`/`idx` are), and a
+# permanent URL without `sn` returns "参数错误".  So Monitor extracts the full
+# article in-session and caches it here; the downstream Scraper serves it from
+# this cache instead of re-hitting WeChat's expired-token / anti-bot wall.
+_ARTICLE_CACHE: Dict[str, dict] = {}
 
-    Two scenarios:
-    1. Sogou intermediate page (weixin.sogou.com/link?url=...): the page
-       holds window.biz/mid/idx/sn — construct the canonical URL from those.
-    2. Direct WeChat article page (mp.weixin.qq.com): the page may expose
-       msg_link / content_url / share_url JS globals, or og:url meta tag.
 
-    WeChat /s?src=11&timestamp=... URLs are session-bound temporary links
-    that show "参数错误" when opened outside the search Referer chain.
+def get_cached_article(url: str) -> Optional[dict]:
+    """Return the in-session article dict for a URL, or None if not cached."""
+    return _ARTICLE_CACHE.get(url)
+
+
+def _extract_wechat_page(page, url: str) -> dict:
+    """Extract the standardized article dict from an already-loaded WeChat page.
+
+    Must be called while the redirect session is still live (inside
+    _resolve_sogou_url).  Mirrors the success return of scraper._scrape_wechat.
     """
-    try:
-        js_vars = page.evaluate("""() => {
-            const result = {};
-            // Sogou intermediate page exposes these window globals
-            if (typeof biz !== 'undefined') result.biz = biz;
-            if (typeof mid !== 'undefined') result.mid = mid;
-            if (typeof idx !== 'undefined') result.idx = idx;
-            if (typeof sn !== 'undefined') result.sn = sn;
-            // Direct WeChat page JS globals
-            if (typeof msg_link !== 'undefined') result.msg_link = msg_link;
-            if (typeof content_url !== 'undefined') result.content_url = content_url;
-            if (typeof share_url !== 'undefined') result.share_url = share_url;
-            // Meta og:url fallback
-            const meta = document.querySelector('meta[property="og:url"]');
-            if (meta && meta.content) result.og_url = meta.content;
-            return result;
-        }""")
-        # Sogou intermediate page: construct permanent URL from window globals.
-        # sn can be empty (some articles don't have it); biz/mid/idx are required.
-        if js_vars.get("biz") and js_vars.get("mid") and js_vars.get("idx"):
-            biz = str(js_vars["biz"])
-            mid_val = str(js_vars["mid"])
-            idx_val = str(js_vars["idx"])
-            sn = str(js_vars.get("sn", ""))
-            url = f"https://mp.weixin.qq.com/s?__biz={biz}&mid={mid_val}&idx={idx_val}"
-            if sn:
-                url += f"&sn={sn}"
-            return url
-        # Direct WeChat page: check known JS globals
-        for key in ("msg_link", "content_url", "share_url", "og_url"):
-            url = str(js_vars.get(key, "")).strip().replace("http://", "https://")
-            if "__biz" in url and "mp.weixin.qq.com" in url:
-                return url
-    except Exception:
-        pass
-    return ""
+    def _txt(selector):
+        try:
+            el = page.query_selector(selector)
+            return el.inner_text().strip() if el else ""
+        except Exception:
+            return ""
 
-
-def _resolve_sogou_url(search_page, sogou_url: str) -> tuple[str, str]:
-    """Navigate to the Sogou redirect URL from search context to reach the article.
-
-    Returns (canonical_url, publish_time).
-    canonical_url is the Sogou redirect URL (permanent, works in real browsers).
-    publish_time is extracted from the WeChat article page.
-
-    WeChat permanent URLs constructed from JS globals (biz/mid/idx) are missing
-    the `sn` parameter and show "参数错误". Sogou redirect URLs are the only
-    reliable way to reach articles.
-    """
-    publish_time = ""
-    ctx = search_page.context
-    page = None
-    try:
-        page = ctx.new_page()
-        search_url = search_page.url
-        page.goto(sogou_url, timeout=15000, wait_until="domcontentloaded",
-                  referer=search_url)
-        page.wait_for_timeout(2000)
-
-        # If we landed on the Sogou redirect page, follow the redirect chain
-        # by waiting for redirect to mp.weixin.qq.com
-        if "mp.weixin.qq.com" not in page.url:
-            page.wait_for_timeout(3000)
-
-        # Extract publish time from the article page
-        if "mp.weixin.qq.com" in page.url:
-            try:
-                el = page.query_selector("em#publish_time")
-                if el:
-                    publish_time = el.inner_text().strip()
-            except Exception:
-                pass
-            if not publish_time:
-                try:
-                    el = page.query_selector(".rich_media_meta_text")
-                    if el:
-                        publish_time = el.inner_text().strip()
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    finally:
-        if page:
-            try:
-                page.close()
-            except Exception:
-                pass
-
-    return sogou_url, publish_time
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Fetch: public article page scraping (no credentials)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def fetch_wechat_article(url: str, timeout: int = 30) -> dict:
-    """Fetch a single WeChat article via requests + BeautifulSoup.
-
-    No credentials needed — works for publicly accessible mp.weixin.qq.com articles.
-    """
-    import requests as _requests
-    from bs4 import BeautifulSoup as _bs
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-    }
-    try:
-        resp = _requests.get(url, headers=headers, timeout=timeout)
-        if resp.status_code != 200:
-            return _error(f"HTTP {resp.status_code}", url)
-        html = resp.text
-    except Exception as e:
-        return _error(str(e), url)
-
-    soup = _bs(html, "lxml")
-
-    # Title
-    title = ""
-    og_title = soup.find("meta", property="og:title")
-    if og_title:
-        title = og_title.get("content", "")
-    if not title:
-        h2 = soup.find("h2", id="activity-name")
-        if h2:
-            title = h2.get_text(strip=True)
-
-    # Author (公众号名称)
-    author = ""
-    og_author = soup.find("meta", property="og:article:author")
-    if og_author:
-        author = og_author.get("content", "")
-    if not author:
-        js_name = soup.find(id="js_name")
-        if js_name:
-            author = js_name.get_text(strip=True)
-
-    # Publish time
-    publish_time = ""
-    og_time = soup.find("meta", property="og:article:published_time")
-    if og_time:
-        publish_time = og_time.get("content", "")[:19]
-
-    # Content
-    content = ""
-    js_content = soup.find("div", id="js_content")
-    if js_content:
-        for hidden in js_content.select(".rich_media_area_extra, script, style"):
-            hidden.decompose()
-        content = js_content.get_text(separator="\n", strip=True)
-    if not content:
-        rm_content = soup.find("div", class_="rich_media_content")
-        if rm_content:
-            content = rm_content.get_text(separator="\n", strip=True)
+    title = _txt("h2#activity-name") or _txt("h1#activity-name")
+    author = _txt("#js_name")
+    publish_time = _txt("em#publish_time") or _txt(".rich_media_meta_text")
+    content = _txt("#js_content") or _txt(".rich_media_content")
 
     return {
         "原文内容": content[:3000] if content else f"标题：{title}",
@@ -335,15 +202,58 @@ def fetch_wechat_article(url: str, timeout: int = 30) -> dict:
     }
 
 
-def _error(msg: str, url: str) -> dict:
-    return {
-        "原文内容": f"(微信公众号抓取失败: {msg})",
-        "发布时间": "", "来源平台": "微信公众号", "发布者类型": "未知",
-        "互动数据": "", "原文链接": url,
-        "社媒数据": {"作者": "", "国家": "CN", "点赞": 0, "评论": 0,
-                      "粉丝": 0, "播放量": None, "作者主页": []},
-        "评论列表": [],
-    }
+def _resolve_sogou_url(search_page, sogou_url: str) -> tuple[str, str]:
+    """Navigate the Sogou redirect into the live WeChat article and extract it.
+
+    Returns (article_url, publish_time).
+
+    The canonical `__biz` permanent URL cannot be reconstructed here: WeChat
+    withholds the `sn` signature from the page (only `__biz`/`mid`/`idx` are
+    exposed), and a permanent URL without `sn` shows "参数错误".  So instead of
+    returning a dead permanent URL, we extract the full article while the
+    redirect session is still live and cache it for the downstream Scraper.
+    article_url is the session URL the article was loaded at (works for
+    in-session viewing and as the cache key), never a guessed __biz URL.
+    """
+    publish_time = ""
+    article_url = sogou_url
+    ctx = search_page.context
+    page = None
+    try:
+        page = ctx.new_page()
+        search_url = search_page.url
+        page.goto(sogou_url, timeout=15000, wait_until="domcontentloaded",
+                  referer=search_url)
+
+        # The Sogou intermediate page JS-redirects to the real mp.weixin.qq.com
+        # article. Actively wait for that redirect so page.url is the session
+        # article URL and the article DOM is loaded.
+        try:
+            page.wait_for_url("**mp.weixin.qq.com**", timeout=12000)
+        except Exception:
+            pass
+
+        if "mp.weixin.qq.com" in page.url:
+            article_url = page.url
+            # Extract + cache the full article while the session is live.
+            article = _extract_wechat_page(page, article_url)
+            _ARTICLE_CACHE[article_url] = article
+            publish_time = article.get("发布时间", "")
+            # In-session body may still show "参数错误" if the token expired
+            # mid-flight; cache it anyway so the Scraper reports the real reason.
+        else:
+            # Redirect did not complete — nothing usable to cache.
+            article_url = sogou_url
+    except Exception:
+        pass
+    finally:
+        if page:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+    return article_url, publish_time
 
 
 if __name__ == "__main__":

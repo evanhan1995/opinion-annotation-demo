@@ -27,6 +27,8 @@ from agents.shared import (
     RawData, Annotation, ActionPlan, KBEntry,
 )
 
+_log = logging.getLogger("yuqing")
+
 
 # ── Pipeline result ────────────────────────────────────────────────────
 @dataclass
@@ -320,11 +322,46 @@ def run_active_monitor(pipeline_notes: str = "",
 
 
 # ── Flow C: Daily report generation ────────────────────────────────────
+def _push_daily_report_feishu(date_str: str) -> None:
+    """Push the daily-report summary card to Feishu.
+
+    Single source of truth for the daily-report notification.  Called by
+    run_daily_report() so every trigger path (scheduler, manual UI button,
+    CLI) pushes the same card — unlike the previous design where only the
+    scheduler pushed.  Never raises: notification failure must not fail report
+    generation.
+
+    The card content is built by DailyReport.build_daily_feishu_summary() from
+    the same 当日 ReportData as the generated report, so the numbers match the
+    actual daily report (not all-time totals).
+    """
+    try:
+        from shared.notify import send_feishu_card
+        from agents.daily_report import build_daily_feishu_summary
+        title, body_text, fields = build_daily_feishu_summary(date_str)
+        sent = send_feishu_card(
+            title=title, body_text=body_text, fields=fields, level="info",
+        )
+        if sent == 0:
+            _log.warning("日报飞书推送未送达（0 个 webhook 接受），date=%s", date_str)
+    except Exception as e:
+        _log.warning("日报飞书推送异常: %s", e)
+
+
 def run_daily_report(date_str: str = "") -> str:
-    """Generate daily report via Daily Report Agent. Returns path to report file."""
+    """Generate daily report via Daily Report Agent. Returns path to report file.
+
+    After a successful generation, pushes a summary card to Feishu regardless
+    of how this was triggered (scheduler / manual button / CLI).
+    """
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
     try:
         from agents.daily_report import generate_daily
-        return generate_daily(date_str)
+        path = generate_daily(date_str)
+        if path and not path.startswith("日报生成失败"):
+            _push_daily_report_feishu(date_str)
+        return path
     except Exception as e:
         return f"日报生成失败: {e}"
 

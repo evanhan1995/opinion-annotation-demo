@@ -13,8 +13,11 @@
 
 import json
 import re
+import logging
 from datetime import datetime
 from pathlib import Path
+
+_log = logging.getLogger("yuqing")
 
 # 路径配置
 ENGINE_DIR = Path(__file__).resolve().parent
@@ -218,6 +221,31 @@ def append_log(case_filename: str, diff_level: str, input_url: str = "") -> None
         f.write(entry)
 
 
+def _notify_urgent_disposal(original_input: dict, human_correction: dict, url: str = "") -> None:
+    """Send a Feishu urgent-disposal alert when a case is corrected to 立即处理.
+
+    Fires only on the correction path (B scenario): the AI annotation is being
+    corrected by a human, and the 分流建议 is being changed INTO 立即处理.
+    Mirrors engine/ingestor.py's A-scenario notification.
+    """
+    if (human_correction or {}).get("分流建议") != "立即处理":
+        return
+    try:
+        from shared.notify import send_urgent_disposal_card
+        social = (original_input or {}).get("社媒数据", {}) or {}
+        sent = send_urgent_disposal_card(
+            title=str((human_correction or {}).get("摘要", "")
+                      or (original_input or {}).get("原文内容", ""))[:60],
+            severity=str((human_correction or {}).get("严重度评级", "")),
+            platform=str((original_input or {}).get("来源平台", "")),
+            url=url or str((original_input or {}).get("原文链接", "")),
+        )
+        if sent == 0:
+            _log.warning("飞书紧急处置通知未送达（0 个 webhook 接受），correction url=%s", (url or "")[:60])
+    except Exception as e:
+        _log.exception("飞书紧急处置通知发送异常: %s", e)
+
+
 def handle_correction(
     original_input: dict,
     ai_output: dict,
@@ -239,6 +267,12 @@ def handle_correction(
          "diffs": {...}}
     """
     diff_level, diffs = compare_and_decide(ai_output, human_correction)
+
+    # 分流建议被人工改为「立即处理」→ 飞书紧急告警（B 场景，与 ingest 的 A 场景独立）。
+    # 仅在字段确实发生变更时触发，避免 AI 本就判立即处理时重复告警。
+    if diff_level in ("significant", "minor") and "分流建议" in diffs:
+        if (human_correction or {}).get("分流建议") == "立即处理":
+            _notify_urgent_disposal(original_input, human_correction, url)
 
     if diff_level == "none":
         return {"action": "no_change", "case_file": None, "diff_level": "none", "diffs": {}}

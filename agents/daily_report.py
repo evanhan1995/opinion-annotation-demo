@@ -14,16 +14,17 @@ Isolation constraints:
 
 Model: MiniMax (Chinese text generation, cost-effective for high-volume output).
 """
-import io
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-if sys.stdout and hasattr(sys.stdout, "buffer"):
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from agents.shared import (
     get_llm, PROJECT_ROOT, WIKI_DIR,
@@ -173,6 +174,52 @@ def _build_daily_markdown(data: ReportData) -> str:
         pass
 
     return _build_daily_template(data)
+
+
+def build_daily_feishu_summary(date_str: str = "") -> tuple[str, str, dict]:
+    """Build a rich Feishu card (title, body, fields) from the daily report data.
+
+    Uses the same ReportData as the generated report (当日, date-filtered) so the
+    pushed numbers match the actual daily report — not the all-time totals that
+    a bare query_stats() would return.
+
+    Returns (title, body_text, fields) for shared.notify.send_feishu_card.
+    """
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    data = _collect_report_data(date_str)
+
+    sev = data.severity_dist
+    body = (
+        f"**当日新增案例**: {data.total_new_cases} 条"
+        f"（近7日均值 {data.avg_prev_7days} 条）\n"
+        f"**P0**: {sev.get('P0', 0)}  **P1**: {sev.get('P1', 0)}  "
+        f"**P2**: {sev.get('P2', 0)}  **P3**: {sev.get('P3', 0)}\n"
+        f"**情感**: 正面 {data.sentiment_dist.get('正面', 0)} / "
+        f"中性 {data.sentiment_dist.get('中性', 0)} / "
+        f"负面 {data.sentiment_dist.get('负面', 0)}"
+    )
+
+    # Top issues (最多 3 条，避免卡片过长)
+    top_issues = data.top_issues[:3]
+    if top_issues:
+        body += "\n**关键议题**:\n" + "\n".join(f"· {t}" for t in top_issues)
+
+    # P0/P1 明细（最多 3 条）
+    p0p1 = data.p0_p1_list[:3]
+    if p0p1:
+        body += "\n**P0/P1 事件**:\n" + "\n".join(
+            f"· [{it.get('severity', '?')}] {it.get('title', '?')[:40]} ({it.get('platform', '?')})"
+            for it in p0p1
+        )
+
+    fields = {
+        "平台分布": "、".join(f"{k}{v}" for k, v in data.platform_dist.items()) or "无",
+        "待跟进": str(data.status_dist.get("待跟进", 0)),
+        "处理中": str(data.status_dist.get("处理中", 0)),
+    }
+
+    return f"舆情日报 — {date_str}", body, fields
 
 
 def _build_daily_template(data: ReportData) -> str:

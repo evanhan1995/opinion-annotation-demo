@@ -182,14 +182,27 @@ def ingest(
     except Exception:
         pass
 
-    # Notify Feishu when a new pending case enters the library
-    if init_status == "待跟进":
-        try:
-            from shared.notify import send_new_pending_case_card
-            social = scraped_data.get("社媒数据", {}) or {}
-            if not isinstance(social, dict):
-                social = {}
-            case_url = url or str(scraped_data.get("原文链接", ""))
+    # Notify Feishu when a case enters the library (new URL only — the dedup
+    # early-return above means existing URLs never reach here).
+    # - 分流建议 == "立即处理" → red urgent-disposal alert.
+    # - Otherwise, a normal pending case → blue "new pending" card.
+    try:
+        from shared.notify import send_new_pending_case_card, send_urgent_disposal_card
+        social = scraped_data.get("社媒数据", {}) or {}
+        if not isinstance(social, dict):
+            social = {}
+        case_url = url or str(scraped_data.get("原文链接", ""))
+        triage = (annotation_result or {}).get("分流建议", "")
+        if triage == "立即处理":
+            sent = send_urgent_disposal_card(
+                title=str((annotation_result or {}).get("摘要", "") or scraped_data.get("原文内容", ""))[:60],
+                severity=str((annotation_result or {}).get("严重度评级", "")),
+                platform=str(scraped_data.get("来源平台", "")),
+                url=case_url,
+            )
+            if sent == 0:
+                _log.warning("飞书紧急处置通知未送达（0 个 webhook 接受），case_url=%s", case_url[:60])
+        elif init_status == "待跟进":
             sent = send_new_pending_case_card(
                 url=case_url,
                 comments=social.get("评论", 0),
@@ -199,8 +212,8 @@ def ingest(
             )
             if sent == 0:
                 _log.warning("飞书新案例通知未送达（0 个 webhook 接受），case_url=%s", case_url[:60])
-        except Exception as e:
-            _log.exception("飞书新案例通知发送异常: %s", e)
+    except Exception as e:
+        _log.exception("飞书通知发送异常: %s", e)
 
     return {
         "action": "case_generated",
@@ -429,11 +442,22 @@ def _generate_auto_case(
     case_id = get_next_case_id()
     filename = f"{case_id}.md"
 
-    title_text = annotation_result.get("摘要", scraped_data.get("原文内容", ""))[:60].replace("\n", " ")
+    title_text = annotation_result.get("摘要", scraped_data.get("原文内容", ""))[:60].replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("|", "｜")
     severity = annotation_result.get("严重度评级", "?")
     action = annotation_result.get("分流建议", "?")
     platform = scraped_data.get("来源平台", "未知")
     today = date.today().isoformat()
+
+    # sentiment：写入 frontmatter，供 query_stats 统计（存量 case 由 curator
+    # 从正文 JSON 兜底解析）。情感可能藏在「情感分析.整体情感」或「多维度情感分析」。
+    _emo = annotation_result.get("情感分析", {})
+    sentiment = ""
+    if isinstance(_emo, dict):
+        sentiment = _emo.get("整体情感", "") or ""
+    if not sentiment:
+        _md = annotation_result.get("多维度情感分析", {})
+        if isinstance(_md, dict):
+            sentiment = _md.get("主体情感", "") or ""
 
     severity_reason = annotation_result.get("严重度理由", "(无)")
     action_reason = annotation_result.get("分流理由", "(无)")
@@ -473,6 +497,7 @@ def _generate_auto_case(
     cats = annotation_result.get("舆情分类", [])
     cat_line = f"categories: [{', '.join(cats)}]" if cats else ""
     author_line = f"author: \"[[authors/{author_file}]]\"" if author_file else ""
+    sent_line = f"sentiment: {sentiment}" if sentiment else ""
 
     # Phase 1: controlled vocabulary frontmatter fields
     nt_line = f"narrative_thread: {narrative_thread}" if narrative_thread else ""
@@ -495,6 +520,7 @@ status: {init_status}
 {kw_line}
 {cat_line}
 {author_line}
+{sent_line}
 {nt_line}
 {sec_line}
 {rtc_line}
@@ -590,7 +616,7 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
     severity = annotation_result.get("严重度评级", "?")
     action = annotation_result.get("分流建议", "?")
     platform = (scraped_data or {}).get("来源平台", annotation_result.get("来源平台", "?"))
-    title = annotation_result.get("摘要", "auto-ingest")[:40]
+    title = annotation_result.get("摘要", "auto-ingest").replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("|", "｜")[:40]
     tags = annotation_result.get("风险标签_受控", annotation_result.get("风险标签", []))[:3]
     categories = annotation_result.get("舆情分类", [])
     narrative_thread = annotation_result.get("叙事分类", "")
@@ -624,7 +650,7 @@ def _update_global_index(new_filename: str, annotation_result: dict) -> None:
     case_num = case_id.split("-")[1]
     severity = annotation_result.get("严重度评级", "?")
     action = annotation_result.get("分流建议", "?")
-    title = annotation_result.get("摘要", "auto-ingest案例")[:40]
+    title = annotation_result.get("摘要", "auto-ingest案例").replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("|", "｜")[:40]
     today = date.today().isoformat()
 
     new_row = f"| [[cases/{case_id}|{case_num}-{title[:30]}]] | {title[:40]} | {severity} | {action} | {today} |"

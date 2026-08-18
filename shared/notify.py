@@ -182,3 +182,21 @@ def send_new_pending_case_card(url: str = "", comments: int = 0, likes: int = 0,
         f"转发：{_metric_text(shares)}"
     )
     return send_feishu_card(title="📥 有新的待处理case", body_text=body, level="info")
+
+
+def send_urgent_disposal_card(title: str = "", severity: str = "", platform: str = "",
+                              url: str = "") -> int:
+    """Notify Feishu (red/error) when a case is marked 立即处理 (urgent disposal).
+
+    Distinct from send_new_pending_case_card: this fires on the 分流建议=立即处理
+    action regardless of whether the URL is already ingested, so a human
+    escalation always produces a visible alert.
+    """
+    body = (
+        "**舆情需立即处置**\n\n"
+        f"标题：{title or '暂无'}\n"
+        f"严重度：{severity or '未知'}\n"
+        f"平台：{platform or '未知'}\n"
+        f"链接：{url or '暂无'}"
+    )
+    return send_feishu_card(title="舆情需立即处置", body_text=body, level="error")

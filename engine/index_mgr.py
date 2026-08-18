@@ -255,7 +255,7 @@ def update_case_index(
 
     case_id = new_filename.replace(".md", "")
     case_num = case_id.split("-")[1]
-    title = title[:40]
+    title = title.replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("|", "｜")[:40]
     tags = tags or []
     today = date.today().isoformat()
     case_ref = f"[[cases/{case_id}|{case_num}]]"
