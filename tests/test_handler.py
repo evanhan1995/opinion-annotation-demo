@@ -60,21 +60,21 @@ class TestTransitionFunction:
 
 class TestTriage:
     def test_returns_action_plan(self):
-        plan = triage(SAMPLE_ANNOTATION)
+        plan = triage(SAMPLE_ANNOTATION, "case-001")
         assert isinstance(plan, ActionPlan)
-        assert plan.case_id
+        assert plan.case_id == "case-001"
         assert plan.status == "待跟进"
 
     def test_p0_gets_escalation(self):
         p0 = Annotation(url="x", platform="x", severity="P0", severity_reason="x",
                         sentiment="负面", risk_tags=["x"], triage="上升PR", comment_risk="红", summary="x")
-        plan = triage(p0)
+        plan = triage(p0, "case-001")
         assert len(plan.escalated_departments) > 0
 
     def test_plan_has_steps(self):
-        plan = triage(SAMPLE_ANNOTATION)
+        plan = triage(SAMPLE_ANNOTATION, "case-001")
         assert len(plan.steps) > 0
 
     def test_plan_has_deadline(self):
-        plan = triage(SAMPLE_ANNOTATION)
+        plan = triage(SAMPLE_ANNOTATION, "case-001")
         assert plan.deadline

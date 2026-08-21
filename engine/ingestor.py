@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from datetime import datetime, date
 from pathlib import Path
@@ -129,8 +130,13 @@ def ingest(
     notes: str = "",
     init_status: str = "待跟进",
     keyword: str = "",
+    case_id: str = "",
 ) -> dict:
     """Auto-ingest: generate case from annotation if URL is new.
+
+    Args:
+        case_id: 由 Orchestrator 统一生成传入（与 Handler.triage 共用同一 id）。
+            为空时内部生成（兼容直接调用 engine.ingestor.ingest 的旧路径，如 UI）。
 
     Returns:
         {"action": "case_generated"|"skipped"|"error",
@@ -155,7 +161,7 @@ def ingest(
     author_file = _upsert_author(social, platform) if social else None
     case_file = _generate_auto_case(scraped_data, annotation_result, url, author_file,
                                      notes=notes, init_status=init_status,
-                                     keyword=keyword)
+                                     keyword=keyword, case_id=case_id)
     _update_case_index(case_file, annotation_result, scraped_data)
     _update_global_index(case_file, annotation_result)
     _append_ingest_log(case_file, annotation_result, url)
@@ -303,11 +309,18 @@ def _get_case_dir(platform: str) -> Path:
 # Case ID
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def get_next_case_id() -> str:
-    """Get next case-XXX id by scanning existing files (flat + subdirectories).
+# 进程内预留编号 + 锁：保证并发调用（如 Monitor 的 ThreadPoolExecutor）不碰撞。
+# _case_id_reserved 是单调递增的内存计数器，即便对应 case 文件尚未落盘，
+# 同一进程内的后续调用也不会复用该编号。None 表示尚未从磁盘播种。
+_CASE_ID_LOCK = threading.Lock()
+_case_id_reserved = None
 
-    Canonical implementation — other modules should import this function
-    rather than maintaining their own copies.
+
+def _scan_max_case_id() -> int:
+    """扫描现有 case 文件（扁平目录 + 平台子目录），返回最大数字编号。
+
+    仅用于进程首次调用时播种计数器；之后 get_next_case_id 完全依赖内存计数器，
+    不再重复扫描磁盘。
     """
     max_id = 0
     if CASES_DIR.exists():
@@ -321,7 +334,31 @@ def get_next_case_id() -> str:
                     m = re.search(r'case-(\d+)', f.name)
                     if m:
                         max_id = max(max_id, int(m.group(1)))
-    return f"case-{max_id + 1:03d}"
+    return max_id
+
+
+def get_next_case_id() -> str:
+    """Get next unique case-XXX id.
+
+    Canonical implementation — other modules should import this function
+    rather than maintaining their own copies.
+
+    并发语义（重要）：
+      - 仅保证**单进程内多线程**安全：进程级 threading.Lock + 单调内存计数器。
+      - 不支持多进程 / 多实例部署下的唯一性：多个进程各自维护独立的内存计数器，
+        互不可见，会碰撞。若未来需要多实例并发写 wiki/cases/，必须引入外部协调
+        （如文件锁、原子自增、数据库序列），不能依赖本函数。
+
+    性能：
+      - 磁盘扫描（_scan_max_case_id）只在进程首次调用时执行一次，
+        之后完全靠内存计数器自增，O(1)，不随案例库规模增长。
+    """
+    global _case_id_reserved
+    with _CASE_ID_LOCK:
+        if _case_id_reserved is None:
+            _case_id_reserved = _scan_max_case_id()
+        _case_id_reserved += 1
+        return f"case-{_case_id_reserved:03d}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -437,9 +474,10 @@ def _generate_auto_case(
     notes: str = "",
     init_status: str = "待跟进",
     keyword: str = "",
+    case_id: str = "",
 ) -> str:
     """Generate auto-ingest case page. Returns filename (e.g. 'case-008.md')."""
-    case_id = get_next_case_id()
+    case_id = case_id or get_next_case_id()
     filename = f"{case_id}.md"
 
     title_text = annotation_result.get("摘要", scraped_data.get("原文内容", ""))[:60].replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("|", "｜")

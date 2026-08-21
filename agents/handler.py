@@ -63,13 +63,16 @@ def transition_status(case_id: str, from_status: str, to_status: str, notes: str
 
 
 # ── Action plan generation ─────────────────────────────────────────────
-def triage(annotation: Annotation) -> ActionPlan:
+def triage(annotation: Annotation, case_id: str) -> ActionPlan:
     """Generate action plan from annotation via rule engine.
 
     Severity + triage recommendation → deterministic steps + escalation.
     Replaces the previous DeepSeek LLM call (saves ~300 tokens per item).
+
+    Args:
+        case_id: 由 Orchestrator 统一生成传入（与 Curator 入库共用同一 id），
+            确保 ActionPlan.case_id 与最终落盘文件名一致。triage 不自行生成 id。
     """
-    case_id = f"case-{datetime.now().strftime('%Y%m%d%H%M')}"
     sev = annotation.severity
     triage_type = annotation.triage
 

@@ -122,10 +122,15 @@ def _build_case_body(raw: RawData, annotation: Annotation, notes: str = "",
 
 
 def ingest(raw: RawData, annotation: Annotation, notes: str = "",
-           init_status: str = "待跟进", keyword: str = "") -> KBEntry:
+           init_status: str = "待跟进", keyword: str = "",
+           case_id: str = "") -> KBEntry:
     """Ingest a case into the knowledge base.
 
     Phase 2: delegates to engine/ingestor.py for full pipeline (dedup, index, author lib, archive).
+
+    Args:
+        case_id: 由 Orchestrator 统一生成传入（与 Handler.triage 共用同一 id），
+            保证最终落盘文件名与 ActionPlan.case_id 一致。为空时回退内部生成。
 
     Called by Orchestrator after Analyst + Handler complete.
     """
@@ -138,13 +143,17 @@ def ingest(raw: RawData, annotation: Annotation, notes: str = "",
         engine_annotation = annotation_to_engine_dict(annotation)
         result = engine_ingest(engine_scraped, engine_annotation, raw.url,
                                notes=notes, init_status=init_status,
-                               keyword=keyword)
+                               keyword=keyword, case_id=case_id)
         case_file = result.get("case_file", "")
-        case_id = case_file.replace(".md", "") if case_file else _generate_case_id()
+        if case_file:
+            # 以实际落盘文件名为准（含 dedup 复用旧文件的情况）
+            case_id = case_file.replace(".md", "")
+        else:
+            case_id = case_id or _generate_case_id()
         case_path = CASES_DIR / case_file if case_file else CASES_DIR / f"{case_id}.md"
     except Exception:
         # Fallback to local case generation
-        case_id = _generate_case_id()
+        case_id = case_id or _generate_case_id()
         frontmatter = _build_case_frontmatter(raw, annotation, case_id,
                                               notes=notes, init_status=init_status)
         body = _build_case_body(raw, annotation, notes=notes, init_status=init_status)

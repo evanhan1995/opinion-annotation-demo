@@ -170,6 +170,8 @@ class Annotation:
 @dataclass
 class ActionPlan:
     """Handler output (PRD §5.4)."""
+    # 由 Orchestrator 统一生成。注意：dedup 场景下此字段可能与最终落盘文件名不一致
+    # （详见 orchestrator.run_passive_analysis 的 case_id 生成逻辑——生成先于入库去重）。
     case_id: str
     status: str             # 待跟进 | 处理中 | 已处理 | 已放弃 | 忽略
     steps: list[str]

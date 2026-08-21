@@ -230,9 +230,14 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
     # ── Stage 3: Handler ──────────────────────────────────────────────
     if progress_callback:
         progress_callback("handler", "生成处置方案...")
+    # case_id 在此统一生成一次（triage 之前），triage 与 Curator 共用同一 id，
+    # 保证 ActionPlan.case_id 与最终落盘文件名一致，避免各 Agent 各自生成
+    # 导致的不一致 / 占号不落盘。
+    from engine.ingestor import get_next_case_id
+    case_id = get_next_case_id()
     try:
         from agents.handler import triage
-        action_plan = triage(annotation)
+        action_plan = triage(annotation, case_id)
     except Exception as e:
         errors.append(f"Handler error: {e}")
         action_plan = None
@@ -243,7 +248,8 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
     try:
         from agents.curator import ingest
         kb_entry = ingest(raw, annotation, notes=pipeline_notes,
-                          init_status=init_status, keyword=keyword_context)
+                          init_status=init_status, keyword=keyword_context,
+                          case_id=case_id)
     except Exception as e:
         errors.append(f"Curator error: {e}")
         kb_entry = None
