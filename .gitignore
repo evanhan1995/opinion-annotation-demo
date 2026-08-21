@@ -44,6 +44,7 @@ notification_config.json
 # Runtime state files
 config/.session_active
 config/_debug.log
+config/scraper_degradation.json
 
 # Node / Playwright
 node_modules/

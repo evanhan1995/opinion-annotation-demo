@@ -74,6 +74,16 @@ def render_tab3():
                 except Exception as e:
                     st.error(f"巡检失败: {e}")
 
+    # ── 爬虫降级提示 ──────────────────────────────────────────────
+    try:
+        from agents.orchestrator import get_scraper_degraded
+        is_degraded, degraded_platform, last_error = get_scraper_degraded()
+        if is_degraded:
+            reason = f"，最后失败原因：{last_error}" if last_error else ""
+            st.warning(f"⚠️ 平台「{degraded_platform}」抓取连续失败，已降级为人工喂料{reason}")
+    except Exception:
+        pass
+
     # ── Card 1: Keyword Management ───────────────────────────────────
     st.markdown(
         '<div class="card"><div class="card-title">🔑 关键词管理</div>',

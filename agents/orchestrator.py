@@ -13,6 +13,7 @@ P0/P1熔断 (PRD §3.6):
   Analyst returns P0/P1 → Orchestrator immediately triggers emergency_dispatch()
   before the rest of the pipeline continues.
 """
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -101,29 +102,108 @@ def _dispatch_emergency(annotation: Annotation) -> bool:
 
 # ── Scraper degradation tracking (PRD S-06) ────────────────────────────
 import threading as _threading
-_SCRAPER_FAILURES: dict[str, int] = {}  # platform → consecutive failure count
+
+# 不对称滞后的降级判定口径：
+#   - 进入降级：连续失败 DEGRADE_THRESHOLD(=3) 次。
+#   - 解除降级：进入降级后需连续成功 UNDEGRADE_SUCCESSES(=2) 次，
+#     中间单次成功不足以解除，避免「降级↔正常」来回抖动。
+DEGRADE_THRESHOLD = 3
+UNDEGRADE_SUCCESSES = 2
+
+_SCRAPER_DEGRADATION_PATH = PROJECT_ROOT / "config" / "scraper_degradation.json"
+
+# 内存状态：{platform: {"count": int, "successes": int, "last_error": str}}
+#   count = 连续失败次数（用于进入降级）；successes = 连续成功次数（用于解除降级）。
+# 持久化到 config/scraper_degradation.json（整体覆盖写入，沿用项目惯例），
+# 进程重启后由 _load_scraper_failures() 恢复，避免「重启即清零」掩盖真实降级。
 _failures_lock = _threading.Lock()
 
 
-def get_scraper_degraded() -> tuple[bool, str]:
-    """Check if any platform has 3+ consecutive scraper failures.
+def _load_scraper_failures() -> dict:
+    """从 config/scraper_degradation.json 恢复持久化的降级状态。"""
+    if not _SCRAPER_DEGRADATION_PATH.exists():
+        return {}
+    try:
+        data = json.loads(_SCRAPER_DEGRADATION_PATH.read_text(encoding="utf-8"))
+        platforms = data.get("platforms", {}) if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+    out = {}
+    for pf, v in platforms.items():
+        if isinstance(v, dict):
+            out[pf] = {
+                "count": int(v.get("count", 0) or 0),
+                "successes": int(v.get("successes", 0) or 0),
+                "last_error": str(v.get("last_error", "") or ""),
+            }
+    return out
 
-    Returns (is_degraded, platform_name). UI checks this to show manual feed.
+
+def _persist_scraper_failures(state: dict) -> None:
+    """持久化降级状态到 config/scraper_degradation.json（整体覆盖）。"""
+    _SCRAPER_DEGRADATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _SCRAPER_DEGRADATION_PATH.write_text(
+        json.dumps({"version": 1, "platforms": state}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+# 模块加载时从磁盘恢复（进程重启后降级状态依然准确）
+_SCRAPER_FAILURES: dict[str, dict] = _load_scraper_failures()
+
+
+def record_scraper_failure(platform: str, reason: str = "") -> None:
+    """记录一次抓取失败：count+1、successes 清零、更新 last_error，并持久化。"""
+    with _failures_lock:
+        entry = _SCRAPER_FAILURES.setdefault(platform, {"count": 0, "successes": 0, "last_error": ""})
+        entry["count"] += 1
+        entry["successes"] = 0
+        entry["last_error"] = reason or ""
+        _persist_scraper_failures(_SCRAPER_FAILURES)
+
+
+def record_scraper_success(platform: str) -> None:
+    """记录一次抓取成功。
+
+    口径（不对称滞后）：
+      - 未降级（count < DEGRADE_THRESHOLD）：一次成功直接清零。
+      - 已降级（count >= DEGRADE_THRESHOLD）：successes+1，连续成功
+        UNDEGRADE_SUCCESSES 次才解除降级。
     """
     with _failures_lock:
-        for pf, count in _SCRAPER_FAILURES.items():
-            if count >= 3:
-                return True, pf
-    return False, ""
+        entry = _SCRAPER_FAILURES.get(platform)
+        if entry is None:
+            return
+        if entry["count"] >= DEGRADE_THRESHOLD:
+            entry["successes"] += 1
+            if entry["successes"] >= UNDEGRADE_SUCCESSES:
+                entry["count"] = 0
+                entry["successes"] = 0
+                entry["last_error"] = ""
+        else:
+            entry["count"] = 0
+            entry["successes"] = 0
+            entry["last_error"] = ""
+        _persist_scraper_failures(_SCRAPER_FAILURES)
+
+
+def get_scraper_degraded() -> tuple[bool, str, str]:
+    """返回 (是否降级, 平台名, 最后失败原因)。UI 据此展示降级提示。"""
+    with _failures_lock:
+        for pf, entry in _SCRAPER_FAILURES.items():
+            if entry.get("count", 0) >= DEGRADE_THRESHOLD:
+                return True, pf, entry.get("last_error", "")
+    return False, "", ""
 
 
 def reset_scraper_failures(platform: str = ""):
-    """Reset failure counter (called after successful fetch or manual feed)."""
+    """重置失败计数（人工喂料成功后调用）。"""
     with _failures_lock:
         if platform:
             _SCRAPER_FAILURES.pop(platform, None)
         else:
             _SCRAPER_FAILURES.clear()
+        _persist_scraper_failures(_SCRAPER_FAILURES)
 
 
 # ── Data clipping (PRD §3.4) — Channel isolation by field selection.
@@ -154,19 +234,15 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
         raw = fetch(url)
         platform = detect_platform(url)
         if raw.comments_raw and any("error" in str(c).lower() or "fail" in str(c).lower() or "unsupported" in str(c).lower() for c in raw.comments_raw):
-            with _failures_lock:
-                _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
+            record_scraper_failure(platform, "评论抓取失败")
         elif not raw.content and not raw.title:
-            with _failures_lock:
-                _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
+            record_scraper_failure(platform, "内容为空")
         else:
-            with _failures_lock:
-                _SCRAPER_FAILURES.pop(platform, None)  # Reset on success
+            record_scraper_success(platform)
     except Exception as e:
         platform = detect_platform(url)
         if isinstance(platform, str) and platform != url:
-            with _failures_lock:
-                _SCRAPER_FAILURES[platform] = _SCRAPER_FAILURES.get(platform, 0) + 1
+            record_scraper_failure(platform, str(e)[:200])
         return PipelineResult(
             flow="passive_analysis", started_at=started,
             finished_at=datetime.now().isoformat(), success=False,
