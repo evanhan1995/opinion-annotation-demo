@@ -10,12 +10,15 @@
 """
 
 import json
+import logging
 import re
 import sys
 import hashlib
 from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import urlparse
+
+_log = logging.getLogger("yuqing")
 
 # Hard timeout for yt-dlp extract_info calls (seconds).
 _SCRAPE_TIMEOUT = 90
@@ -101,8 +104,8 @@ def _get_config() -> dict:
     if config_path.exists():
         try:
             return json.loads(config_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            _log.debug("读取 engine/config.json 失败: %s", e)
     return {}
 
 
@@ -290,8 +293,8 @@ def _scrape_xhs(url: str, timeout: int = 30000) -> dict:
         mc_result = _fetch_via_mc(url)
         if not mc_result.get("_scrape_error"):
             return mc_result
-    except ImportError:
-        pass
+    except ImportError as e:
+        _log.debug("MediaCrawler 适配器未安装，跳过小红书第二通道: %s", e)
 
     return result
 
@@ -313,7 +316,8 @@ def _scrape_reddit_json_api(url: str) -> dict:
             return None
         data = resp.json()
         post_data = data[0]["data"]["children"][0]["data"]
-    except Exception:
+    except Exception as e:
+        _log.warning("Reddit JSON API 抓取失败，回退 Playwright: %s", e)
         return None
 
     title = post_data.get("title", "")
@@ -336,8 +340,8 @@ def _scrape_reddit_json_api(url: str) -> dict:
             c_score = cdata.get("score", 0)
             if body_text.strip():
                 comments.append({"内容": body_text.strip()[:300], "点赞": str(c_score)})
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("Reddit 评论解析失败（评论置空）: %s", e)
 
     return {
         "原文内容": f"标题：{title}\n\n正文：{body[:1000] if body else '(无正文)'}",
@@ -378,8 +382,8 @@ def _scrape_reddit_playwright(url: str, timeout: int = 30000) -> dict:
         page.goto(old_url, timeout=timeout, wait_until="domcontentloaded")
         try:
             page.wait_for_selector("a.title", timeout=5000)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("Reddit title selector 等待超时: %s", e)
 
         title_el = page.query_selector("a.title")
         title = title_el.inner_text() if title_el else ""
@@ -411,7 +415,8 @@ def _scrape_reddit_playwright(url: str, timeout: int = 30000) -> dict:
                 cl = score_el_c.inner_text() if score_el_c else ""
                 if text.strip():
                     result["评论列表"].append({"内容": text.strip()[:300], "点赞": cl})
-            except Exception:
+            except Exception as e:
+                _log.debug("Reddit 单条评论解析失败，跳过: %s", e)
                 continue
     finally:
         browser.close()
@@ -484,15 +489,15 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
                     "name": "auth_token", "value": auth_token,
                     "domain": ".x.com", "path": "/",
                 }])
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("X auth_token cookie 注入失败: %s", e)
 
         page = ctx.new_page()
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
         try:
             page.wait_for_selector("article[data-testid='tweet']", timeout=8000)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("X tweet selector 等待超时: %s", e)
 
         tweet_el = page.query_selector("article div[data-testid='tweetText']")
         tweet_text = tweet_el.inner_text() if tweet_el else ""
@@ -524,7 +529,8 @@ def _scrape_x(url: str, timeout: int = 30000) -> dict:
                 text = text_el.inner_text() if text_el else ""
                 if text.strip():
                     result["评论列表"].append({"内容": text.strip()[:300], "点赞": "0"})
-            except Exception:
+            except Exception as e:
+                _log.debug("X 单条回复解析失败，跳过: %s", e)
                 continue
     finally:
         browser.close()
@@ -569,7 +575,8 @@ def _scrape_generic(url: str, timeout: int = 30000) -> dict:
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
         try:
             page.wait_for_selector("article, main, div.post-content, div.content", timeout=5000)
-        except Exception:
+        except Exception as e:
+            _log.debug("通用网页正文 selector 等待超时: %s", e)
             page.wait_for_timeout(1000)
 
         title = page.title() or ""
@@ -623,8 +630,8 @@ def _scrape_douyin(url: str, timeout: int = 30000) -> dict:
         mc_result = fetch_douyin_note(url)
         if not mc_result.get("_scrape_error"):
             return mc_result
-    except ImportError:
-        pass
+    except ImportError as e:
+        _log.debug("douyin_adapter 未安装，跳过抖音第二通道: %s", e)
     return result
 
 
@@ -806,8 +813,8 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
         cached = get_cached_article(url)
         if cached:
             return cached
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("读取微信文章缓存失败，回退实时抓取: %s", e)
 
     ctx = page = None
     try:
@@ -822,11 +829,11 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
         page.goto(url, timeout=min(timeout, 30000), wait_until="domcontentloaded")
         try:
             page.wait_for_selector("#js_content, #activity-name", timeout=10000)
-        except Exception:
+        except Exception as e:
             # The selector may time out because the URL is incomplete (missing
             # sn) or anti-bot blocked. Fall through to inspect the body text
             # below so we report the real reason instead of a raw Timeout.
-            pass
+            _log.debug("微信正文 selector 等待超时: %s", e)
 
         body_text = page.inner_text("body")[:500]
         if "参数错误" in body_text or "param error" in body_text.lower():
@@ -842,13 +849,13 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
             el = page.query_selector("h2#activity-name")
             if el:
                 title = el.inner_text().strip()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("微信标题提取失败: %s", e)
         if not title:
             try:
                 title = page.evaluate("() => document.title || ''")
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信标题(document.title)提取失败: %s", e)
 
         # Author (公众号名称)
         author = ""
@@ -856,8 +863,8 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
             el = page.query_selector("#js_name")
             if el:
                 author = el.inner_text().strip()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("微信公众号名称提取失败: %s", e)
 
         # Publish time
         publish_time = ""
@@ -865,23 +872,23 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
             el = page.query_selector("em#publish_time")
             if el:
                 publish_time = el.inner_text().strip()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("微信发布时间提取失败: %s", e)
         if not publish_time:
             try:
                 publish_time = page.evaluate("""() => {
                     const em = document.getElementById('publish_time');
                     return em ? em.textContent.trim() : '';
                 }""")
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信发布时间(document)提取失败: %s", e)
         if not publish_time:
             try:
                 el = page.query_selector(".rich_media_meta_text")
                 if el:
                     publish_time = el.inner_text().strip()
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信发布时间(meta)提取失败: %s", e)
         if not publish_time:
             try:
                 ts_str = page.evaluate("""() => {
@@ -895,8 +902,8 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
                         ts = ts / 1000
                     from datetime import datetime
                     publish_time = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信发布时间(时间戳)提取失败: %s", e)
 
         # Content
         content = ""
@@ -904,15 +911,15 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
             el = page.query_selector("#js_content")
             if el:
                 content = el.inner_text().strip()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("微信正文提取失败: %s", e)
         if not content:
             try:
                 el = page.query_selector(".rich_media_content")
                 if el:
                     content = el.inner_text().strip()
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信正文(.rich_media_content)提取失败: %s", e)
 
         return {
             "原文内容": content[:3000] if content else f"标题：{title}",
@@ -939,13 +946,13 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
         if page:
             try:
                 page.close()
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信页面关闭失败: %s", e)
         if ctx:
             try:
                 ctx.close()
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("微信上下文关闭失败: %s", e)
 
 
 def _scrape_instagram(url: str, timeout: int = 30000) -> dict:
@@ -1017,8 +1024,8 @@ def fetch_youtube_subtitles(url: str) -> str:
                             if t and t not in ("\n", "[音乐]", "[Music]", "[掌声]", "[Applause]"):
                                 lines.append(t)
                     return " ".join(lines)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug("YouTube 字幕下载失败，尝试下一种语言: %s", e)
     return ""
 
 

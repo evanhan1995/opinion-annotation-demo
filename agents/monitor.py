@@ -19,6 +19,7 @@ Model: No LLM needed — all logic is pure code (search APIs + dedup + Excel).
 """
 import io
 import json
+import logging
 import random
 import re
 import sys
@@ -27,6 +28,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+_log = logging.getLogger("yuqing")
 
 # Hard timeout per platform search call (seconds).  A single yt-dlp
 # ytsearch / ytsearchdate call normally takes 2-8 s on a decent
@@ -148,8 +151,8 @@ def _search_douyin(keyword: str, sort_type: str, count: int = 30,
                     engagement=r.get("engagement", 0),
                     snippet=r.get("snippet", ""),
                 ) for r in mc_results]
-    except Exception:
-        pass  # Fall through to Tier 2
+    except Exception as e:
+        _log.debug("抖音 MediaCrawler 搜索失败，回退 TikTokDownloader: %s", e)  # Fall through to Tier 2
 
     # ── Tier 2: TikTokDownloader Search API (fallback) ──
     # Resolve TikTokDownloader path: config.json → default
@@ -161,8 +164,8 @@ def _search_douyin(keyword: str, sort_type: str, count: int = 30,
             cfg_path_val = cfg.get("paths", {}).get("tiktok_downloader", "")
             if cfg_path_val:
                 _TT_DOWNLOADER_PATH = Path(cfg_path_val)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("读取 TikTokDownloader 路径配置失败，使用默认路径: %s", e)
 
     if not _TT_DOWNLOADER_PATH.exists():
         return [SearchResult(
@@ -210,8 +213,8 @@ def _search_douyin(keyword: str, sort_type: str, count: int = 30,
                 try:
                     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
                     douyin_cfg = cfg.get("douyin", {})
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug("读取抖音配置失败: %s", e)
             cookie_str = douyin_cfg.get("cookie", "")
             # Fallback: read from TikTokDownloader's own cookie dict
             if not cookie_str:
@@ -220,8 +223,8 @@ def _search_douyin(keyword: str, sort_type: str, count: int = 30,
                     tt_cookie = _load_tt_cookie()
                     if tt_cookie and len(tt_cookie) > 3:
                         cookie_str = _tt_cookie_str_fn(tt_cookie)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.debug("读取抖音 Cookie 失败: %s", e)
             if cookie_str:
                 cookie_pairs = {}
                 for pair in cookie_str.split("; "):
@@ -367,8 +370,12 @@ def _search_youtube(keyword: str, sort_type: str, count: int = 30,
                     engagement=(entry.get("view_count") or 0),
                     snippet=entry.get("description", "")[:200] if entry.get("description") else "",
                 ))
-    except Exception:
-        pass
+    except Exception as e:
+        _log.exception("YouTube 搜索失败: keyword=%s: %s", keyword, e)
+        return [SearchResult(
+            platform="youtube", keyword_id="", keyword=keyword, sort_type=sort_type,
+            title="", url="", error=f"YOUTUBE_SEARCH_ERROR: {str(e)[:120]}",
+        )]
 
     # Client-side date sort: ytsearchdate extractor is broken, so we
     # fetch via ytsearch and sort by upload_date descending ourselves.
@@ -399,8 +406,8 @@ def _search_xiaohongshu(keyword: str, sort_type: str, count: int = 30,
         try:
             cdata = json.loads(cookie_file.read_text(encoding="utf-8"))
             cookie_str = cdata.get("cookie_str", "")
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("读取小红书 Cookie 文件失败: %s", e)
 
     if not cookie_str:
         return [SearchResult(
@@ -436,8 +443,8 @@ def _search_xiaohongshu(keyword: str, sort_type: str, count: int = 30,
                 )
                 for r in mc_results
             ]
-    except Exception:
-        pass
+    except Exception as e:
+        _log.debug("小红书 MediaCrawler 搜索失败，回退 Playwright: %s", e)
 
     # ── Tier 3: Playwright browser ─────────────────────────────────────
     try:
@@ -733,8 +740,12 @@ def _search_bilibili(keyword: str, sort_type: str, count: int = 30,
         _asyncio.set_event_loop(loop)
         items = loop.run_until_complete(_do())
         loop.close()
-    except Exception:
-        return []
+    except Exception as e:
+        _log.exception("B站搜索失败: keyword=%s: %s", keyword, e)
+        return [SearchResult(
+            platform="bilibili", keyword_id="", keyword=keyword, sort_type=sort_type,
+            title="", url="", error=f"BILIBILI_SEARCH_ERROR: {str(e)[:120]}",
+        )]
 
     from datetime import datetime as _dt
     output = []
@@ -745,8 +756,8 @@ def _search_bilibili(keyword: str, sort_type: str, count: int = 30,
         if item.get("pubdate"):
             try:
                 pub_str = _dt.fromtimestamp(item["pubdate"]).strftime("%Y-%m-%d")
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("B站发布时间格式化失败: %s", e)
         url = f"https://www.bilibili.com/video/{item['bvid']}" if item.get("bvid") else \
               f"https://www.bilibili.com/video/av{item['aid']}"
         output.append(SearchResult(
@@ -768,8 +779,12 @@ def _search_weibo(keyword: str, sort_type: str, count: int = 30,
     try:
         from crawl4weibo import WeiboClient
         client = WeiboClient()
-    except Exception:
-        return []
+    except Exception as e:
+        _log.exception("微博搜索初始化失败: keyword=%s: %s", keyword, e)
+        return [SearchResult(
+            platform="weibo", keyword_id="", keyword=keyword, sort_type=sort_type,
+            title="", url="", error=f"WEIBO_SEARCH_ERROR: {str(e)[:120]}",
+        )]
 
     items = []
     page = 1
@@ -786,8 +801,8 @@ def _search_weibo(keyword: str, sort_type: str, count: int = 30,
                             pub_str = pub_str.split("+")[0].strip()
                         if " " in pub_str:
                             pub_str = pub_str[:10]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _log.debug("微博发布时间格式化失败: %s", e)
                 engagement = (p.attitudes_count or 0) + (p.comments_count or 0) + (p.reposts_count or 0)
                 post_url = f"https://weibo.com/{p.user_id}/{p.bid}" if p.user_id and p.bid else ""
                 items.append({
@@ -840,8 +855,11 @@ def _search_wechat(keyword: str, sort_type: str, count: int = 30,
             ))
         return results[:count]
     except Exception as e:
-        print(f"[微信] 搜索失败: {e}", file=sys.stderr)
-        return []
+        _log.exception("微信搜索失败: keyword=%s: %s", keyword, e)
+        return [SearchResult(
+            platform="wechat", keyword_id="", keyword=keyword, sort_type=sort_type,
+            title="", url="", error=f"WECHAT_SEARCH_ERROR: {str(e)[:120]}",
+        )]
 
 
 PLATFORM_SEARCHERS = {
@@ -884,8 +902,8 @@ def _load_previous_urls(keyword_id: str, platform: str) -> set:
                 for item in data:
                     if isinstance(item, dict) and "url" in item:
                         urls.add(item["url"])
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug("读取历史归档去重数据失败: %s", e)
     return urls
 
 
@@ -1078,7 +1096,9 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
                 kr.hot_results = results
 
             prev_urls = _load_previous_urls(kw_id, platform)
-            kr.new_items = [r for r in results if r.url not in prev_urls]
+            # 过滤掉失败项（url 为空或 error 非空），避免把「抓取失败」当新内容抓取；
+            # 失败项仍保留在 hot_results/date_results 中供 UI 展示为错误。
+            kr.new_items = [r for r in results if r.url and not r.error and r.url not in prev_urls]
 
             harvest.total_fetched += len(results)
             harvest.total_new += len(kr.new_items)
