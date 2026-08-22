@@ -28,7 +28,7 @@ from ui.shared import (
     _clear_correction_widgets,
     _convert_wikilinks,
     _do_ingest,
-    _render_annotation_result,
+    _render_correction_form,
     _save_annotation_output,
     do_scrape,
 )
@@ -423,6 +423,12 @@ def render_tab_entry():
         # ── Result preview ──
         if st.session_state.get("annotation_result"):
             _render_entry_result_preview("entry_")
+            # 纠偏表单：复用 ui.shared 的独立纠偏组件，接入结果展示区下方
+            _render_correction_form(
+                st.session_state.get("annotation_result"),
+                st.session_state.get("scraped_data") or {},
+                key_prefix="corr_",
+            )
 
     # ── Right Sidebar (Figma matching) ──
     with side_col:

@@ -14,8 +14,10 @@
 import json
 import re
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+
+from engine.constants import extract_annotation_diffs
 
 _log = logging.getLogger("yuqing")
 
@@ -26,14 +28,8 @@ WIKI_DIR = PROJECT_DIR / "wiki"
 CASES_DIR = WIKI_DIR / "cases"
 INDEX_PATH = CASES_DIR / "index.md"
 LOG_PATH = WIKI_DIR / "log.md"
+OUTPUT_DIR = PROJECT_DIR / "outputs"
 
-SIGNIFICANT_FIELDS = [
-    "严重度评级",
-    "分流建议",
-    "情感分析.整体情感",
-    "评论区分析.评论红绿灯",
-    "评论区分析.评论总结",
-]
 
 def _get_next_case_id() -> str:
     """获取下一个案例编号。Delegates to canonical ingestor implementation."""
@@ -51,18 +47,6 @@ def _parse_date(date_str: str) -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def _get_nested(d: dict, path: str):
-    """获取嵌套字典值，路径用 . 分隔，如 '情感分析.整体情感'。"""
-    keys = path.split(".")
-    val = d
-    for k in keys:
-        if isinstance(val, dict):
-            val = val.get(k)
-        else:
-            return None
-    return val
-
-
 def _format_value(v) -> str:
     """格式化值为可读字符串。"""
     if v is None:
@@ -75,15 +59,15 @@ def _format_value(v) -> str:
 def compare_and_decide(ai_output: dict, human_correction: dict) -> tuple[str, dict]:
     """对比 AI 输出与人工修正，返回 (差异等级, 差异摘要)。
 
+    字段范围由 engine.constants.ANNOTATION_COMPARABLE_FIELDS 统一定义。
+
     Returns:
         (level, diff): level 为 "significant" / "minor" / "none"
+            diff 结构为 {field: {"ai": ..., "human": ...}}（保持既有返回结构）。
     """
     diffs = {}
-    for field in SIGNIFICANT_FIELDS:
-        ai_val = _get_nested(ai_output, field)
-        human_val = _get_nested(human_correction, field)
-        if ai_val != human_val:
-            diffs[field] = {"ai": ai_val, "human": human_val}
+    for d in extract_annotation_diffs(ai_output, human_correction):
+        diffs[d["field"]] = {"ai": d["old_value"], "human": d["new_value"]}
 
     if not diffs:
         return ("none", {})
@@ -246,6 +230,53 @@ def _notify_urgent_disposal(original_input: dict, human_correction: dict, url: s
         _log.exception("飞书紧急处置通知发送异常: %s", e)
 
 
+def _save_correction_json(
+    url: str,
+    platform: str,
+    diff_level: str,
+    ai_output: dict,
+    human_correction: dict,
+    diffs: dict,
+    case_file: str | None = None,
+) -> str | None:
+    """落盘纠偏数据为 outputs/*_correction.json（significant 与 minor 统一数据源）。
+
+    命名规则对齐 outputs/*_annotation.json：{date}_{abbrev}_{content_id}_correction.json。
+    diffs 由 compare_and_decide 的 {field: {ai, human}} 转为扁平 [{field, old_value, new_value}]。
+    """
+    from engine.constants import PLATFORM_ABBREV
+    from engine.scraper import _extract_content_id
+
+    today = date.today().isoformat()
+    abbrev = PLATFORM_ABBREV.get(platform, "web")
+    content_id = _extract_content_id(url, platform) if url else "manual"
+    filename = f"{today}_{abbrev}_{content_id}_correction.json"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = OUTPUT_DIR / filename
+
+    flat_diffs = [
+        {"field": field, "old_value": vals["ai"], "new_value": vals["human"]}
+        for field, vals in (diffs or {}).items()
+    ]
+    payload = {
+        "source": "human_correction",
+        "url": url or "",
+        "platform": platform or "未知",
+        "corrected_at": datetime.now().isoformat(),
+        "diff_level": diff_level,
+        "ai_output": ai_output,
+        "human_correction": human_correction,
+        "diffs": flat_diffs,
+        "case_file": case_file,
+    }
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return filename
+    except OSError:
+        return None
+
+
 def handle_correction(
     original_input: dict,
     ai_output: dict,
@@ -256,8 +287,8 @@ def handle_correction(
 
     Args:
         original_input: 原始舆情输入
-        ai_output: AI 标注输出（不含 _meta）
-        human_correction: 人工修正后的标注
+        ai_output: AI 标注输出（可含 _meta，入口统一清洗）
+        human_correction: 人工修正后的标注（可含 _meta，入口统一清洗）
         url: 原文链接
 
     Returns:
@@ -266,6 +297,11 @@ def handle_correction(
          "diff_level": "...",
          "diffs": {...}}
     """
+    # 入口统一清洗 _meta，保证 generate_case 与 _save_correction_json 消费同一份数据，
+    # 避免 ai_output / human_correction 两侧 _meta 不对称（两条落盘路径共用清洗后的变量）。
+    ai_output = {k: v for k, v in (ai_output or {}).items() if k != "_meta"}
+    human_correction = {k: v for k, v in (human_correction or {}).items() if k != "_meta"}
+
     diff_level, diffs = compare_and_decide(ai_output, human_correction)
 
     # 分流建议被人工改为「立即处理」→ 飞书紧急告警（B 场景，与 ingest 的 A 场景独立）。
@@ -277,13 +313,28 @@ def handle_correction(
     if diff_level == "none":
         return {"action": "no_change", "case_file": None, "diff_level": "none", "diffs": {}}
 
+    case_file = None
     if diff_level == "significant":
-        filename = generate_case(original_input, ai_output, human_correction, diff_level, diffs, url)
-        update_case_index(filename, human_correction)
-        append_log(filename, diff_level, url)
+        case_file = generate_case(original_input, ai_output, human_correction, diff_level, diffs, url)
+        update_case_index(case_file, human_correction)
+
+    # significant 与 minor 都落盘 correction json（统一数据源，方便统计脚本只读一处）。
+    platform = (original_input or {}).get("来源平台", "未知")
+    _save_correction_json(
+        url=url or (original_input or {}).get("原文链接", ""),
+        platform=platform,
+        diff_level=diff_level,
+        ai_output=ai_output,
+        human_correction=human_correction,
+        diffs=diffs,
+        case_file=case_file,
+    )
+
+    if diff_level == "significant":
+        append_log(case_file, diff_level, url)
         return {
             "action": "generated_case",
-            "case_file": filename,
+            "case_file": case_file,
             "diff_level": "significant",
             "diffs": diffs,
         }

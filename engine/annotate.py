@@ -28,6 +28,7 @@ if sys.platform == "win32":
 # ═══════════════════════════════════════════════════════════════════════════════
 
 from engine._compat import call_with_timeout
+from engine.constants import extract_annotation_diffs
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
@@ -897,39 +898,45 @@ def find_annotation_history(url: str) -> list[dict]:
     return history
 
 
-_FIELDS_TO_DIFF = [
-    ("严重度评级", "严重度"),
-    ("分流建议", "分流"),
-    ("摘要", "摘要"),
-    ("严重度理由", "严重度理由"),
-    ("分流理由", "分流理由"),
-    ("风险标签", "风险标签"),
-]
+_FIELD_LABELS = {
+    "严重度评级": "严重度",
+    "分流建议": "分流",
+    "情感分析.整体情感": "情感",
+    "叙事分类": "叙事分类",
+    "真实性评估": "真实性评估",
+    "风险标签": "风险标签",
+    "舆情分类": "舆情分类",
+    "评论区分析.评论红绿灯": "评论红绿灯",
+    "评论区分析.评论总结": "评论总结",
+    "摘要": "摘要",
+    "严重度理由": "严重度理由",
+}
+
+
+def _format_traffic_light(tl) -> str:
+    """把评论红绿灯 dict 格式化为「红X/黄Y/绿Z」可读字符串。"""
+    if not isinstance(tl, dict):
+        return str(tl)
+    return f"红{tl.get('红', '?')}/黄{tl.get('黄', '?')}/绿{tl.get('绿', '?')}"
 
 
 def diff_annotations(old: dict, new: dict) -> list[dict]:
     """Compare two annotation results, return list of changed fields.
 
     Each diff: {field, label, old_value, new_value}
+    字段范围由 engine.constants.ANNOTATION_COMPARABLE_FIELDS 统一定义，
+    list 字段用集合对称差判定（顺序不敏感）。
     """
     diffs = []
-    for field, label in _FIELDS_TO_DIFF:
-        ov = old.get(field)
-        nv = new.get(field)
-        if ov != nv:
-            diffs.append({"field": field, "label": label, "old_value": ov, "new_value": nv})
-    # Sentiment
-    old_sent = old.get("情感分析", {}).get("整体情感", "")
-    new_sent = new.get("情感分析", {}).get("整体情感", "")
-    if old_sent != new_sent:
-        diffs.append({"field": "情感分析.整体情感", "label": "情感", "old_value": old_sent, "new_value": new_sent})
-    # Comment traffic lights
-    old_tl = old.get("评论区分析", {}).get("评论红绿灯", {})
-    new_tl = new.get("评论区分析", {}).get("评论红绿灯", {})
-    if old_tl != new_tl:
-        diffs.append({"field": "评论区红绿灯", "label": "评论红绿灯",
-                       "old_value": f"红{old_tl.get('红','?')}/黄{old_tl.get('黄','?')}/绿{old_tl.get('绿','?')}",
-                       "new_value": f"红{new_tl.get('红','?')}/黄{new_tl.get('黄','?')}/绿{new_tl.get('绿','?')}"})
+    for d in extract_annotation_diffs(old, new):
+        field = d["field"]
+        label = _FIELD_LABELS.get(field, field.rsplit(".", 1)[-1])
+        ov = d["old_value"]
+        nv = d["new_value"]
+        if field == "评论区分析.评论红绿灯":
+            ov = _format_traffic_light(ov)
+            nv = _format_traffic_light(nv)
+        diffs.append({"field": field, "label": label, "old_value": ov, "new_value": nv})
     return diffs
 
 

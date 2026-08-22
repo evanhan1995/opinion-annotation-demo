@@ -5,6 +5,7 @@ All render helpers, annotation helpers, and I/O functions used by tabs and sideb
 Extracted from app.py — no logic changes, pure code movement.
 """
 
+import copy
 import json
 import re
 from datetime import date, datetime
@@ -130,6 +131,151 @@ def _render_citations(citations: list):
 # ═══════════════════════════════════════════════════════════════════════════════
 # Annotation result renderer
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _render_correction_form(result: dict, scraped: dict, key_prefix: str = "corr_"):
+    """独立的纠偏表单，可被任意结果展示 UI 调用（录入研判 Tab / 旧标注 Tab 复用）。
+
+    内部从 result / scraped 参数重新取字段值，不依赖外部作用域变量。
+    所有 widget 用 key_prefix 隔离，避免多 Tab 重复 key。
+    """
+    if not result:
+        return
+
+    severity = result.get("严重度评级", "?")
+    action = result.get("分流建议", "?")
+    sentiment = result.get("情感分析", {}).get("整体情感", "?")
+    categories = result.get("舆情分类", []) or []
+    comments_analysis = result.get("评论区分析") or {}
+    ai_comment_details = comments_analysis.get("评论详情", [])
+    ai_traffic = comments_analysis.get("评论红绿灯", {})
+
+    st.divider()
+    st.subheader("纠偏（修正 AI 标注）")
+
+    with st.expander("点击展开纠偏表单", expanded=False, key=f"{key_prefix}form_expander"):
+        st.markdown("修改你认为 AI 判断不准确的字段，然后点击保存。差异显著时将自动生成校准案例。")
+
+        corr_severity = st.selectbox(
+            "严重度评级",
+            ["P0", "P1", "P2", "P3"],
+            index=["P0", "P1", "P2", "P3"].index(severity) if severity in ["P0", "P1", "P2", "P3"] else 2,
+            key=f"{key_prefix}severity",
+        )
+        corr_action = st.selectbox(
+            "分流建议",
+            ["立即处理", "持续观察", "可忽略", "正面可利用"],
+            index=["立即处理", "持续观察", "可忽略", "正面可利用"].index(action) if action in ["立即处理", "持续观察", "可忽略", "正面可利用"] else 1,
+            key=f"{key_prefix}action",
+        )
+        corr_sentiment = st.selectbox(
+            "整体情感",
+            ["正面", "负面", "中性", "混合"],
+            index=["正面", "负面", "中性", "混合"].index(sentiment) if sentiment in ["正面", "负面", "中性", "混合"] else 3,
+            key=f"{key_prefix}sentiment",
+        )
+        corr_categories = st.multiselect(
+            "舆情分类",
+            CATEGORY_OPTIONS,
+            default=categories if isinstance(categories, list) else [],
+            key=f"{key_prefix}categories",
+        )
+        corr_summary = st.text_area("摘要", value=result.get("摘要", ""), key=f"{key_prefix}summary")
+        corr_reason = st.text_area("严重度理由", value=result.get("严重度理由", ""), key=f"{key_prefix}reason")
+
+        # ---------- 评论区修正 ----------
+        st.divider()
+        st.markdown("#### 评论区修正")
+
+        corr_comment_summary = st.text_area(
+            "评论总结",
+            value=comments_analysis.get("评论总结", ""),
+            key=f"{key_prefix}comment_summary",
+            placeholder="一句话概括评论区整体风向...",
+        )
+
+        corrected_sentiments = []
+        if ai_comment_details:
+            st.caption(f"逐条修正情感（共 {len(ai_comment_details)} 条）")
+            for i, d in enumerate(ai_comment_details):
+                original_sentiment = d.get("情感", "中性")
+                new_sentiment = st.selectbox(
+                    f"#{i + 1} {d.get('内容', '')[:40]}...",
+                    ["正面", "中性", "负面"],
+                    index=["正面", "中性", "负面"].index(original_sentiment) if original_sentiment in ["正面", "中性", "负面"] else 1,
+                    key=f"{key_prefix}comment_{i}",
+                )
+                corrected_sentiments.append(new_sentiment)
+
+            if corrected_sentiments:
+                red = corrected_sentiments.count("负面")
+                yellow = corrected_sentiments.count("中性")
+                green = corrected_sentiments.count("正面")
+                total = red + yellow + green
+                if total > 0:
+                    st.markdown(
+                        f"修正后红绿灯：\U0001f534 {red}  \U0001f7e1 {yellow}  \U0001f7e2 {green}"
+                        + f"  |  AI原始：\U0001f534{ai_traffic.get('红','?')} \U0001f7e1{ai_traffic.get('黄','?')} \U0001f7e2{ai_traffic.get('绿','?')}"
+                    )
+
+        corr_note = st.text_input("纠偏备注（可选）", placeholder="为什么这样修正...", key=f"{key_prefix}note")
+
+        if st.button("保存纠偏", type="primary", key=f"{key_prefix}save_correction"):
+            # deepcopy：human_correction 独立于 result，避免浅拷贝把 AI 原始标注的
+            # 情感分析/评论区分析等嵌套字段一并改掉（否则 diff 会被静默吞掉）。
+            human_correction = copy.deepcopy(result)
+            human_correction["严重度评级"] = corr_severity
+            human_correction["分流建议"] = corr_action
+            if "情感分析" not in human_correction:
+                human_correction["情感分析"] = {}
+            human_correction["情感分析"]["整体情感"] = corr_sentiment
+            human_correction["摘要"] = corr_summary
+            human_correction["严重度理由"] = corr_reason
+            human_correction["舆情分类"] = corr_categories
+
+            if ai_comment_details and corrected_sentiments:
+                new_details = []
+                for i, d in enumerate(ai_comment_details):
+                    new_d = dict(d)
+                    new_d["情感"] = corrected_sentiments[i]
+                    new_details.append(new_d)
+                human_correction["评论区分析"] = {
+                    "评论红绿灯": {
+                        "红": corrected_sentiments.count("负面"),
+                        "黄": corrected_sentiments.count("中性"),
+                        "绿": corrected_sentiments.count("正面"),
+                    },
+                    "评论详情": new_details,
+                    "评论总结": corr_comment_summary,
+                }
+            elif corr_comment_summary and corr_comment_summary != comments_analysis.get("评论总结", ""):
+                human_correction["评论区分析"] = dict(comments_analysis)
+                human_correction["评论区分析"]["评论总结"] = corr_comment_summary
+
+            # _meta 清洗已收口到 handle_correction 入口，此处直接传原始 result。
+            correction_result = handle_correction(
+                original_input=scraped or {},
+                ai_output=result,
+                human_correction=human_correction,
+                url=(scraped or {}).get("原文链接", ""),
+            )
+            st.session_state.correction_result = correction_result
+
+            if correction_result["action"] == "generated_case":
+                st.success(f"已生成新校准案例: {correction_result['case_file']}")
+                st.info("下一轮标注将受此案例校准。请刷新知识库以加载新案例。")
+            elif correction_result["action"] == "logged_only":
+                st.info("差异较小，已记录日志（不生成新案例）。")
+            else:
+                st.info("未检测到差异。")
+
+    # 纠偏结果反馈
+    if st.session_state.correction_result:
+        cr = st.session_state.correction_result
+        if cr["action"] != "no_change" and cr.get("diffs"):
+            st.markdown("**检测到的差异：**")
+            for field, vals in cr["diffs"].items():
+                st.markdown(f"- {field}: `{vals['ai']}` → `{vals['human']}`")
+
 
 def _render_annotation_result(key_prefix: str = "", show_social_card: bool = True):
     """Render annotation result display. Only called inside annotation tabs.
@@ -395,138 +541,8 @@ def _render_annotation_result(key_prefix: str = "", show_social_card: bool = Tru
                     if h_idx < len(history) - 1:
                         st.divider()
 
-    # ═══════════════════════════════════════════════════════════════════
-    # 纠偏功能
-    # ═══════════════════════════════════════════════════════════════════
-    st.divider()
-    st.subheader("纠偏（修正 AI 标注）")
-
-    with st.expander("点击展开纠偏表单", expanded=False, key=f"{key_prefix}correction_form_expander"):
-        st.markdown("修改你认为 AI 判断不准确的字段，然后点击保存。差异显著时将自动生成校准案例。")
-
-        corr_severity = st.selectbox(
-            "严重度评级",
-            ["P0", "P1", "P2", "P3"],
-            index=["P0", "P1", "P2", "P3"].index(severity) if severity in ["P0", "P1", "P2", "P3"] else 2,
-            key=f"{key_prefix}corr_severity",
-        )
-        corr_action = st.selectbox(
-            "分流建议",
-            ["立即处理", "持续观察", "可忽略", "正面可利用"],
-            index=["立即处理", "持续观察", "可忽略", "正面可利用"].index(action) if action in ["立即处理", "持续观察", "可忽略", "正面可利用"] else 1,
-            key=f"{key_prefix}corr_action",
-        )
-        corr_sentiment = st.selectbox(
-            "整体情感",
-            ["正面", "负面", "中性", "混合"],
-            index=["正面", "负面", "中性", "混合"].index(sentiment) if sentiment in ["正面", "负面", "中性", "混合"] else 3,
-            key=f"{key_prefix}corr_sentiment",
-        )
-        corr_categories = st.multiselect(
-            "舆情分类",
-            CATEGORY_OPTIONS,
-            default=categories if isinstance(categories, list) else [],
-            key=f"{key_prefix}corr_categories",
-        )
-        corr_summary = st.text_area("摘要", value=result.get("摘要", ""), key=f"{key_prefix}corr_summary")
-        corr_reason = st.text_area("严重度理由", value=result.get("严重度理由", ""), key=f"{key_prefix}corr_reason")
-
-        # ---------- 评论区修正 ----------
-        comments_analysis = result.get("评论区分析") or {}
-        ai_comment_details = comments_analysis.get("评论详情", [])
-        ai_traffic = comments_analysis.get("评论红绿灯", {})
-
-        st.divider()
-        st.markdown("#### 评论区修正")
-
-        corr_comment_summary = st.text_area(
-            "评论总结",
-            value=comments_analysis.get("评论总结", ""),
-            key=f"{key_prefix}corr_comment_summary",
-            placeholder="一句话概括评论区整体风向...",
-        )
-
-        corrected_sentiments = []
-        if ai_comment_details:
-            st.caption(f"逐条修正情感（共 {len(ai_comment_details)} 条）")
-            for i, d in enumerate(ai_comment_details):
-                original_sentiment = d.get("情感", "中性")
-                new_sentiment = st.selectbox(
-                    f"#{i + 1} {d.get('内容', '')[:40]}...",
-                    ["正面", "中性", "负面"],
-                    index=["正面", "中性", "负面"].index(original_sentiment) if original_sentiment in ["正面", "中性", "负面"] else 1,
-                    key=f"{key_prefix}corr_comment_{i}",
-                )
-                corrected_sentiments.append(new_sentiment)
-
-            if corrected_sentiments:
-                red = corrected_sentiments.count("负面")
-                yellow = corrected_sentiments.count("中性")
-                green = corrected_sentiments.count("正面")
-                total = red + yellow + green
-                if total > 0:
-                    st.markdown(
-                        f"修正后红绿灯：\U0001f534 {red}  \U0001f7e1 {yellow}  \U0001f7e2 {green}"
-                        + f"  |  AI原始：\U0001f534{ai_traffic.get('红','?')} \U0001f7e1{ai_traffic.get('黄','?')} \U0001f7e2{ai_traffic.get('绿','?')}"
-                    )
-
-        corr_note = st.text_input("纠偏备注（可选）", placeholder="为什么这样修正...", key=f"{key_prefix}corr_note")
-
-        if st.button("保存纠偏", type="primary", key=f"{key_prefix}save_correction"):
-            human_correction = dict(result)
-            human_correction["严重度评级"] = corr_severity
-            human_correction["分流建议"] = corr_action
-            if "情感分析" not in human_correction:
-                human_correction["情感分析"] = {}
-            human_correction["情感分析"]["整体情感"] = corr_sentiment
-            human_correction["摘要"] = corr_summary
-            human_correction["严重度理由"] = corr_reason
-            human_correction["舆情分类"] = corr_categories
-
-            if ai_comment_details and corrected_sentiments:
-                new_details = []
-                for i, d in enumerate(ai_comment_details):
-                    new_d = dict(d)
-                    new_d["情感"] = corrected_sentiments[i]
-                    new_details.append(new_d)
-                human_correction["评论区分析"] = {
-                    "评论红绿灯": {
-                        "红": corrected_sentiments.count("负面"),
-                        "黄": corrected_sentiments.count("中性"),
-                        "绿": corrected_sentiments.count("正面"),
-                    },
-                    "评论详情": new_details,
-                    "评论总结": corr_comment_summary,
-                }
-            elif corr_comment_summary and corr_comment_summary != comments_analysis.get("评论总结", ""):
-                human_correction["评论区分析"] = dict(comments_analysis)
-                human_correction["评论区分析"]["评论总结"] = corr_comment_summary
-
-            ai_output_clean = {k: v for k, v in result.items() if k != "_meta"}
-
-            correction_result = handle_correction(
-                original_input=st.session_state.scraped_data or {},
-                ai_output=ai_output_clean,
-                human_correction=human_correction,
-                url=st.session_state.get("url_input", ""),
-            )
-            st.session_state.correction_result = correction_result
-
-            if correction_result["action"] == "generated_case":
-                st.success(f"已生成新校准案例: {correction_result['case_file']}")
-                st.info("下一轮标注将受此案例校准。请刷新知识库以加载新案例。")
-            elif correction_result["action"] == "logged_only":
-                st.info("差异较小，已记录日志（不生成新案例）。")
-            else:
-                st.info("未检测到差异。")
-
-    # 纠偏结果反馈
-    if st.session_state.correction_result:
-        cr = st.session_state.correction_result
-        if cr["action"] != "no_change" and cr.get("diffs"):
-            st.markdown("**检测到的差异：**")
-            for field, vals in cr["diffs"].items():
-                st.markdown(f"- {field}: `{vals['ai']}` → `{vals['human']}`")
+    # 纠偏表单（抽为独立函数 _render_correction_form，供录入研判 Tab 复用）
+    _render_correction_form(result, scraped, key_prefix=f"{key_prefix}corr_")
 
     # Ingest 结果反馈
     if st.session_state.ingest_result:
