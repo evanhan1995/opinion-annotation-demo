@@ -2,12 +2,37 @@
 """Tab 3: Monitor Dashboard — keyword management, patrol, alerts."""
 
 import json
+import logging
 import streamlit as st
 from ui.theme import spacer
 from datetime import datetime
 from pathlib import Path
 
+_log = logging.getLogger("yuqing")
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _save_keywords_config(keywords_path: Path, cfg: dict) -> bool:
+    """保存关键词配置，带「防误清空」保护。
+
+    规则：
+      - cfg["keywords"] 非空 → 正常写入。
+      - cfg["keywords"] 为空列表 []，且磁盘文件已存在且其 keywords 非空
+        → 拒绝写入（记 warning，返回 False，由调用方在 UI 提示用户）。
+      - 磁盘文件为空或不存在 → 允许写入空列表（不拦截合理清空场景）。
+    返回 True=已写入，False=被拦截。
+    """
+    if cfg.get("keywords") == [] and keywords_path.exists():
+        try:
+            existing = json.loads(keywords_path.read_text(encoding="utf-8-sig"))
+            if existing.get("keywords"):
+                _log.warning("检测到关键词列表为空且磁盘已有非空配置，拦截保存以防误清空")
+                return False
+        except (json.JSONDecodeError, OSError):
+            pass  # 读盘异常不阻塞保存
+    keywords_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
 
 
 def render_tab3():
@@ -41,8 +66,12 @@ def render_tab3():
         return cfg
 
     def _save_config(cfg):
-        keywords_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-        st.session_state.monitor_cfg = cfg
+        saved = _save_keywords_config(keywords_path, cfg)
+        if saved:
+            st.session_state.monitor_cfg = cfg
+        else:
+            st.warning("⚠️ 关键词列表为空，为防止误清空未执行保存。如需清空请联系管理员确认。")
+        return saved
 
     cfg = _load_config()
     keywords = [kw for kw in cfg.get("keywords", []) if kw.get("active", True)]
@@ -128,9 +157,9 @@ def render_tab3():
                     "notes": "",
                 })
                 cfg["keywords"] = all_keywords
-                _save_config(cfg)
-                st.success(f"已添加: {new_kw.strip()}")
-                st.rerun()
+                if _save_config(cfg):
+                    st.success(f"已添加: {new_kw.strip()}")
+                    st.rerun()
 
     # Render keyword tags as clickable buttons (click = delete)
     if all_keywords:
@@ -148,9 +177,9 @@ def render_tab3():
                 ):
                     all_keywords.pop(i)
                     cfg["keywords"] = all_keywords
-                    _save_config(cfg)
-                    st.success(f"已删除「{kw['keyword']}」")
-                    st.rerun()
+                    if _save_config(cfg):
+                        st.success(f"已删除「{kw['keyword']}」")
+                        st.rerun()
 
     # Platform select pills
     active_platforms = set()
