@@ -29,6 +29,7 @@ from ui.tab3_monitor import render_tab3
 from ui.tab4_disposition import render_tab4
 from ui.tab_knowledge import render_tab_knowledge
 from ui.tab6_reports import render_tab6
+from ui.tab_report_templates import render_tab_report_templates
 from ui.tab_tracking import render_tab_tracking
 from ui.tab_settings import render_tab_settings
 
@@ -578,6 +579,8 @@ elif active_tab == "知识库":
     render_tab_knowledge()
 elif active_tab == "报告":
     render_tab6()
+elif active_tab == "报告模板":
+    render_tab_report_templates()
 elif active_tab == "高危追踪":
     render_tab_tracking()
 elif active_tab == "设置":

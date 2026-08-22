@@ -117,11 +117,20 @@ class TestRoleAccess:
 
     def test_admin_has_all_tabs(self):
         from engine.auth import get_allowed_tabs
-        assert len(get_allowed_tabs("admin")) == 8
+        tabs = get_allowed_tabs("admin")
+        assert len(tabs) == 9
+        assert "报告模板" in tabs
 
     def test_monitor_limited_tabs(self):
         from engine.auth import get_allowed_tabs
         assert len(get_allowed_tabs("monitor")) == 4
+
+    def test_report_editor_has_report_templates_tab(self):
+        from engine.auth import get_allowed_tabs
+        tabs = get_allowed_tabs("report_editor")
+        assert len(tabs) == 5
+        assert "报告" in tabs
+        assert "报告模板" in tabs
 
     def test_unknown_role_defaults(self):
         from engine.auth import get_allowed_tabs
