@@ -16,10 +16,14 @@ Model: MiniMax (Chinese text generation, cost-effective for high-volume output).
 """
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+from engine.report_model import (
+    FinalReport, save_final_report, make_report_id, get_active_template,
+)
 
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
@@ -186,118 +190,70 @@ def generate_daily(date_str: str = "") -> str:
     """Generate daily report from real case metrics. Returns path to report file.
 
     Phase 3: LLM generation via DeepSeek with template fallback.
+    统一报告源：生成后缓存 FinalReport（.report.json），报告 Tab 与飞书同读。
     """
     if not date_str:
         date_str = datetime.now().strftime("%Y-%m-%d")
 
     data = _collect_report_data(date_str)
-    content = _build_daily_markdown(data)
+    template = get_active_template("daily")
+    ir, markdown = _build_ir_and_markdown(data, template)
 
-    REPORTS_DAILY_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORTS_DAILY_DIR / f"{date_str}.md"
-    report_path.write_text(content, encoding="utf-8")
-
-    # Also generate HTML version
     try:
-        generate_daily_html(data)
+        from engine.report_ir import render_html
+        html = render_html(ir)
     except Exception:
-        pass  # HTML is optional enhancement
+        html = ""
 
-    return str(report_path)
+    fr = FinalReport(
+        report_id=make_report_id("daily", date_str),
+        report_type="daily",
+        report_date=date_str,
+        template_id=template.template_id,
+        template_version=template.version,
+        generated_at=datetime.now().isoformat(),
+        status="published",
+        data=asdict(data),
+        ir=asdict(ir),
+        markdown=markdown,
+        html=html,
+    )
+    save_final_report(fr)
 
-
-_TEMPLATES_DIR = PROJECT_ROOT / "templates"
-_EXAMPLES_DIR = _TEMPLATES_DIR / "report_examples"
-
-
-def _read_template(filename: str) -> str | None:
-    """Read a template file if it exists."""
-    path = _TEMPLATES_DIR / filename
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return None
-
-
-def _load_report_example(report_type: str) -> str:
-    """Load a Daily World-style report example for format guidance.
-
-    Args:
-        report_type: "daily" or "monthly"
-    """
-    filename = f"{report_type}_report_example.md"
-    path = _EXAMPLES_DIR / filename
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return ""
+    return str(REPORTS_DAILY_DIR / f"{date_str}.md")
 
 
-def _build_daily_markdown(data: ReportData) -> str:
-    """Build daily report via IR pipeline (LLM → validate → render).
+def _build_ir_and_markdown(data: ReportData, template) -> tuple:
+    """Build ReportIR + markdown via the IR pipeline (LLM → validate → render).
 
     v7.1: Uses engine.report_ir for structured generation with schema validation.
     Falls back to template on LLM or validation failure.
+
+    Returns (ReportIR, markdown_str). The IR is kept so the FinalReport can
+    persist structured chapters for the Feishu renderer (single source of truth).
     """
     from engine.report_ir import build_ir, fill_analysis, validate_ir, render_md
 
+    ir = build_ir(data, template)
+    ok = False
     try:
-        ir = build_ir(data, "daily")
         ir = fill_analysis(ir)
         ok, errors = validate_ir(ir)
         if not ok:
             ir = fill_analysis(ir, retry_hint=errors)
             ok, _ = validate_ir(ir)
-        if ok:
-            return render_md(ir)
     except Exception:
-        pass
+        ok = False
 
-    return _build_daily_template(data)
+    if ok:
+        md = render_md(ir)
+    else:
+        md = _build_daily_template(data) if template.template_type == "daily" else _build_monthly_template(data)
 
-
-def build_daily_feishu_summary(date_str: str = "") -> tuple[str, str, dict]:
-    """Build a rich Feishu card (title, body, fields) from the daily report data.
-
-    Uses the same ReportData as the generated report (当日, date-filtered) so the
-    pushed numbers match the actual daily report — not the all-time totals that
-    a bare query_stats() would return.
-
-    Returns (title, body_text, fields) for shared.notify.send_feishu_card.
-    """
-    if not date_str:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-    data = _collect_report_data(date_str)
-
-    sev = data.severity_dist
-    body = (
-        f"**当日新增案例**: {data.total_new_cases} 条"
-        f"（近7日均值 {data.avg_prev_7days} 条）\n"
-        f"**P0**: {sev.get('P0', 0)}  **P1**: {sev.get('P1', 0)}  "
-        f"**P2**: {sev.get('P2', 0)}  **P3**: {sev.get('P3', 0)}\n"
-        f"**情感**: 正面 {data.sentiment_dist.get('正面', 0)} / "
-        f"中性 {data.sentiment_dist.get('中性', 0)} / "
-        f"负面 {data.sentiment_dist.get('负面', 0)}"
-    )
-
-    # Top issues (最多 3 条，避免卡片过长)
-    top_issues = data.top_issues[:3]
-    if top_issues:
-        body += "\n**关键议题**:\n" + "\n".join(f"· {t}" for t in top_issues)
-
-    # P0/P1 明细（最多 3 条）
-    p0p1 = data.p0_p1_list[:3]
-    if p0p1:
-        body += "\n**P0/P1 事件**:\n" + "\n".join(
-            f"· [{it.get('severity', '?')}] {it.get('title', '?')[:40]} ({it.get('platform', '?')})"
-            for it in p0p1
-        )
-
-    fields = {
-        "平台分布": "、".join(f"{k}{v}" for k, v in data.platform_dist.items()) or "无",
-        "待跟进": str(data.status_dist.get("待跟进", 0)),
-        "处理中": str(data.status_dist.get("处理中", 0)),
-    }
-
-    return f"舆情日报 — {date_str}", body, fields
+    # 追加「监测概况」章节（IR 渲染路径与模板回退路径统一在这里追加，
+    # 保证两种路径的日报/月报都展示真实监测数据或「无监测数据」）。
+    md = md.rstrip() + "\n\n" + _monitor_section_md(data.monitor_stats) + "\n"
+    return ir, md
 
 
 def _build_daily_template(data: ReportData) -> str:
@@ -332,36 +288,42 @@ def generate_monthly(month_str: str = "") -> str:
 
     v7.1: Uses engine.report_ir for structured generation with schema validation.
     Falls back to template on failure.
+    统一报告源：生成后缓存 FinalReport（.report.json）。
     """
     if not month_str:
         month_str = datetime.now().strftime("%Y-%m")
 
     data = _collect_report_data(month_str=month_str)
-
-    from engine.report_ir import build_ir, fill_analysis, validate_ir, render_md
+    template = get_active_template("monthly")
+    ir, markdown = _build_ir_and_markdown(data, template)
 
     try:
-        ir = build_ir(data, "monthly")
-        ir = fill_analysis(ir)
-        ok, errors = validate_ir(ir)
-        if not ok:
-            ir = fill_analysis(ir, retry_hint=errors)
-            ok, _ = validate_ir(ir)
-        if ok:
-            content = render_md(ir)
-            REPORTS_MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
-            report_path = REPORTS_MONTHLY_DIR / f"{month_str}.md"
-            report_path.write_text(content, encoding="utf-8")
-            try:
-                generate_monthly_html(data)
-            except Exception:
-                pass
-            return str(report_path)
+        from engine.report_ir import render_html
+        html = render_html(ir)
     except Exception:
-        pass
+        html = ""
 
-    # Fallback: built-in template
-    content = f"""# 舆情月报 {month_str}
+    fr = FinalReport(
+        report_id=make_report_id("monthly", month_str),
+        report_type="monthly",
+        report_date=month_str,
+        template_id=template.template_id,
+        template_version=template.version,
+        generated_at=datetime.now().isoformat(),
+        status="published",
+        data=asdict(data),
+        ir=asdict(ir),
+        markdown=markdown,
+        html=html,
+    )
+    save_final_report(fr)
+
+    return str(REPORTS_MONTHLY_DIR / f"{month_str}.md")
+
+
+def _build_monthly_template(data: ReportData) -> str:
+    """Built-in monthly template fallback (no LLM analysis)."""
+    return f"""# 舆情月报 {data.date}
 
 ## 一、月度声量趋势
 - 当月案例总数：{data.total_new_cases} 条
@@ -387,14 +349,6 @@ def generate_monthly(month_str: str = "") -> str:
 ## 八、下月监测建议
 （待配置模板后自动生成）
 """
-    REPORTS_MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORTS_MONTHLY_DIR / f"{month_str}.md"
-    report_path.write_text(content, encoding="utf-8")
-    try:
-        generate_monthly_html(data)
-    except Exception:
-        pass
-    return str(report_path)
 
 
 # ── HTML Report (v7.1 — IR-based) ──────────────────────────────────────
