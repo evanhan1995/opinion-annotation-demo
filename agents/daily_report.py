@@ -14,6 +14,7 @@ Isolation constraints:
 
 Model: MiniMax (Chinese text generation, cost-effective for high-volume output).
 """
+import json
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -27,7 +28,7 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
         pass
 
 from agents.shared import (
-    get_llm, PROJECT_ROOT, WIKI_DIR,
+    get_llm, PROJECT_ROOT, WIKI_DIR, OUTPUTS_DIR,
 )
 
 REPORTS_DAILY_DIR = WIKI_DIR / "reports" / "daily"
@@ -48,6 +49,78 @@ class ReportData:
     status_dist: dict = field(default_factory=dict)
     p0_p1_list: list[dict] = field(default_factory=list)
     monitor_stats: dict = field(default_factory=dict)
+
+
+# ── Monitor stats helpers ───────────────────────────────────────────────
+def _monitor_stats_path(date_str: str) -> Path:
+    """monitor_stats 文件路径：outputs/monitor_stats_{YYYY-MM-DD}.json。"""
+    return OUTPUTS_DIR / f"monitor_stats_{date_str}.json"
+
+
+def _load_daily_monitor_stats(date_str: str) -> dict:
+    """读取当天 monitor_stats 文件，返回 {监测关键词数, 去重率}。
+
+    文件不存在（当天没跑 Monitor）返回空 dict —— 与「监测了但结果为 0」区分：
+    空 dict 表示「无监测数据」，非空 dict 里的 0 才是真实统计结果。
+    """
+    path = _monitor_stats_path(date_str)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return {
+        "监测关键词数": payload.get("keywords_searched", 0),
+        "去重率": payload.get("dedup_rate", 0.0),
+    }
+
+
+def _aggregate_monthly_monitor_stats(month_str: str) -> dict:
+    """聚合当月所有 monitor_stats_{YYYY-MM-DD}.json，返回 {监测关键词数, 去重率}。
+
+    口径：
+      - 监测关键词数：当月所有天 keyword_ids 去重后的数量（不是逐天累加，
+        否则同一关键词会被重复计数）。
+      - 去重率：(Σ total_fetched - Σ total_new) / Σ total_fetched 重新计算，
+        不对每日 dedup_rate 做简单平均（简单平均在每日样本量不同时会失真）。
+    当月无任何监测文件返回空 dict（=无监测数据）。
+    """
+    files = sorted(OUTPUTS_DIR.glob(f"monitor_stats_{month_str}-*.json"))
+    if not files:
+        return {}
+    total_fetched = 0
+    total_new = 0
+    keyword_ids: set = set()
+    for f in files:
+        try:
+            payload = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        total_fetched += int(payload.get("total_fetched", 0) or 0)
+        total_new += int(payload.get("total_new", 0) or 0)
+        for kid in payload.get("keyword_ids", []) or []:
+            keyword_ids.add(kid)
+    dedup_rate = (total_fetched - total_new) / total_fetched if total_fetched > 0 else 0.0
+    return {
+        "监测关键词数": len(keyword_ids),
+        "去重率": dedup_rate,
+    }
+
+
+def _monitor_section_md(monitor_stats: dict) -> str:
+    """渲染「监测概况」章节。
+
+    monitor_stats 为空 dict → 显示「无监测数据」；非空 → 显示真实数字。
+    去重率格式化为百分比（与 ui/tab3_monitor.py 的 .0% 口径一致）。
+    """
+    lines = ["## 监测概况"]
+    if not monitor_stats:
+        lines.append("- 无监测数据")
+    else:
+        lines.append(f"- 监测关键词数：{monitor_stats.get('监测关键词数', 0)}")
+        lines.append(f"- 去重率：{monitor_stats.get('去重率', 0.0):.0%}")
+    return "\n".join(lines)
 
 
 # ── Data collection ────────────────────────────────────────────────────
@@ -79,6 +152,13 @@ def _collect_report_data(date_str: str = "", month_str: str = "") -> ReportData:
         date_to = date_str + "T23:59:59"
         data = ReportData(date=date_str)
 
+    # 监测统计：日报读当天文件，月报读当月聚合；文件不存在则为空 dict（=无监测数据）。
+    # 必须在「无案例早退」之前设置——Monitor 可能跑了但 0 条新增，此时仍应展示真实数据。
+    if month_str:
+        data.monitor_stats = _aggregate_monthly_monitor_stats(month_str)
+    else:
+        data.monitor_stats = _load_daily_monitor_stats(date_str)
+
     stats = curator_stats(date_from=date_from, date_to=date_to)
     if not stats["total_cases"]:
         return data
@@ -97,8 +177,6 @@ def _collect_report_data(date_str: str = "", month_str: str = "") -> ReportData:
         seven_days_ago_str = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         week_cases = len(query_cases({"date_from": seven_days_ago_str}))
         data.avg_prev_7days = round(week_cases / 7, 1) if week_cases else 0.0
-
-    data.monitor_stats = {"搜索关键词数": 0, "去重率": 0}
 
     return data
 

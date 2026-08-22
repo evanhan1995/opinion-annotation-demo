@@ -961,6 +961,26 @@ def _export_excel(harvest: MonitorHarvest) -> str:
     return str(path)
 
 
+def _persist_monitor_stats(stats: MonitorStats, date_str: str, keyword_ids: list[str]) -> str:
+    """将本次 Monitor 的汇总统计持久化到 outputs/monitor_stats_{date_str}.json。
+
+    字段口径（供日报读取真实监测数据）：
+      - keywords_searched / platforms_queried / total_fetched / total_new / dedup_rate
+        直接来自 MonitorStats（本次监测任务的汇总）。
+      - keyword_ids：本次监测用到的关键词 id 列表，供月报计算「去重后关键词数」。
+
+    date_str 格式为 YYYY-MM-DD（与 raw/monitor/{date}/ 目录命名一致）。
+    返回写入的文件路径。
+    """
+    from dataclasses import asdict
+    path = OUTPUTS_DIR / f"monitor_stats_{date_str}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = asdict(stats)
+    payload["keyword_ids"] = list(keyword_ids)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path)
+
+
 # ── Main entry point ───────────────────────────────────────────────────
 def execute_job(progress_callback=None, sort_preference: str = "default",
                 date_from: str = "", date_to: str = "") -> MonitorHarvest:
@@ -1120,6 +1140,9 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
         total_new=harvest.total_new,
         dedup_rate=harvest.dedup_rate,
     )
+
+    # 持久化监测统计，供日报读取真实数据（区分「无监测数据」与「结果为 0」）
+    _persist_monitor_stats(harvest.stats, date_str, [kw["id"] for kw in keywords])
 
     return harvest
 
