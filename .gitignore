@@ -45,6 +45,7 @@ notification_config.json
 config/.session_active
 config/_debug.log
 config/scraper_degradation.json
+config/model_degradation.json
 
 # Node / Playwright
 node_modules/

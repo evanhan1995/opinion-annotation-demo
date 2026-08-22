@@ -10,10 +10,13 @@
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
+
+_log = logging.getLogger("yuqing")
 
 # Windows 终端 UTF-8 编码适配
 if sys.platform == "win32":
@@ -487,6 +490,70 @@ def _annotate_openai_style(user_message: str, system_prompt: str, config: dict) 
             "message": "API 返回内容无法解析为 JSON",
             "raw_response": raw_text,
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 降级链：多 provider 尝试 + Sentinel 规则预标注兜底
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _provider_config(provider: str) -> dict | None:
+    """从 MODEL_REGISTRY 读 provider 配置；未配置 key 返回 None（跳过该 provider）。"""
+    from agents.shared import MODEL_REGISTRY
+    cfg = MODEL_REGISTRY.get(provider)
+    if not cfg or not cfg.api_key:
+        return None
+    return {"api_key": cfg.api_key, "api_base": cfg.base_url, "model": cfg.model}
+
+
+def _sentinel_to_engine_dict(sentinel_result) -> dict:
+    """把 SentinelResult 规则预标注转成 engine 标注 dict（供 _engine_result_to_annotation 消费）。
+
+    Sentinel 只能粗粒度判定 severity/sentiment，其余字段取保守默认，
+    degraded 标记由调用方（analyst）写入。
+    """
+    sev = getattr(sentinel_result, "suggested_severity", "") or "P3"
+    sent = getattr(sentinel_result, "suggested_sentiment", "") or "中性"
+    reason = getattr(sentinel_result, "reason", "") or "Sentinel 预标注"
+    return {
+        "严重度评级": sev,
+        "严重度理由": f"[Sentinel pre-filter] {reason}",
+        "情感分析": {"整体情感": sent},
+        "风险标签": ["预标注"] if sent and sent != "中性" else [],
+        "分流建议": "内部研判" if sev in ("P2", "P3") else "上升PR",
+        "评论区分析": {"评论红绿灯": {"红": 0, "黄": 0, "绿": 1}},
+        "舆情分类": [],
+        "摘要": f"[快速通道] {reason}",
+    }
+
+
+def annotate_with_fallback(user_msg: str, system_prompt: str, config: dict,
+                           sentinel_result=None) -> tuple[dict, bool, str]:
+    """多 provider 降级 + Sentinel 兜底。返回 (result_dict, degraded, reason)。
+
+    降级链：deepseek → minimax（已配置 key 者）→ Sentinel 规则预标注（若传入）。
+    调用失败与 JSON 解析失败一视同仁（都返回 error dict → 切换下一 provider）。
+    每次失败记录 _log.warning + 持久化降级状态（engine.model_degradation）。
+    """
+    from engine.model_degradation import record_llm_success, record_llm_failure
+
+    provider_chain = [p for p in ("deepseek", "minimax") if _provider_config(p)]
+    for provider in provider_chain:
+        pcfg = _provider_config(provider)
+        merged = {**config, "api_key": pcfg["api_key"],
+                  "api_base": pcfg["api_base"], "model": pcfg["model"],
+                  "api_style": "openai"}
+        result = _annotate_openai_style(user_msg, system_prompt, merged)
+        if not result.get("error"):
+            record_llm_success("analyst")
+            return result, False, ""
+        record_llm_failure("analyst", result.get("message", "unknown"))
+        _log.warning("Analyst provider %s 失败，尝试下一 provider: %s",
+                     provider, result.get("message", "unknown"))
+
+    # 全部 LLM 失败 → Sentinel 规则预标注（粗粒度）
+    if sentinel_result is not None:
+        return _sentinel_to_engine_dict(sentinel_result), True, "all-llm-failed→sentinel"
+    return {"error": True, "message": "all LLM providers failed"}, True, "no-llm-no-sentinel"
 
 
 def _annotate_anthropic(user_message: str, system_prompt: str, config: dict) -> dict:

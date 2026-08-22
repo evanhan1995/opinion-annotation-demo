@@ -535,6 +535,10 @@ def _generate_auto_case(
     rtc_line = f"risk_tags_controlled: [{', '.join(risk_tags_controlled)}]" if risk_tags_controlled else ""
     rtx_line = f"risk_tags_candidate: [{', '.join(risk_tags_candidate)}]" if risk_tags_candidate else ""
     tt_line = f"target_type: {target_type}"
+    # 降级标记：LLM 失败降级时写入 frontmatter（degraded=true + 原因），供 UI 标记
+    _deg = annotation_result.get("degraded", False)
+    deg_line = (f"degraded: true\ndegraded_reason: {annotation_result.get('degraded_reason', '')}"
+                if _deg else "")
 
     content = f"""---
 title: 案例{case_id.split('-')[1]}: {title_text}
@@ -555,6 +559,7 @@ status: {init_status}
 {rtc_line}
 {rtx_line}
 {tt_line}
+{deg_line}
 notes: {notes}
 tags: [auto_ingest, {severity}]
 ---

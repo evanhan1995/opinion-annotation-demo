@@ -434,6 +434,30 @@ def _build_search_stats(results: list[dict]) -> str:
 # Query API
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def answer_from_search_only(query: str, results: list[dict] | None = None) -> dict:
+    """LLM 失败降级：直接拼接检索结果，不调 LLM 总结/解释。
+
+    复用 search_wiki（bigram/embedding 检索）+ build_agent_context 的格式化，
+    返回带 degraded=True 标记的回答，供 UI 提示「模型暂不可用、结果未经 AI 总结」。
+    """
+    if results is None:
+        results = search_wiki(query, max_results=15)
+    if not results:
+        return {
+            "answer": "知识库中暂无与您问题相关的页面。",
+            "citations": [], "search_results": [], "degraded": True,
+        }
+    body = build_agent_context(results)
+    answer = f"⚠️ 模型暂不可用，以下为知识库检索结果（未做 AI 总结）：\n\n{body}"
+    citations = [{"title": r["title"], "path": r["path"], "type": r["dirname"]} for r in results]
+    return {
+        "answer": answer,
+        "citations": citations,
+        "search_results": [{"title": r["title"], "path": r["path"], "score": r["score"]} for r in results],
+        "degraded": True,
+    }
+
+
 def ask_agent(
     query: str,
     config: dict,
@@ -490,7 +514,13 @@ def ask_agent(
         else:
             raw = _call_openai_style(messages, agent_config)
     except Exception as e:
-        return {"error": True, "message": f"Agent API 调用失败: {e}"}
+        # 降级：LLM 失败 → 直接拼接 bigram/embedding 检索结果（不调 LLM 总结）
+        from engine.model_degradation import record_llm_failure
+        record_llm_failure("curator", str(e))
+        _log.warning("Agent LLM 调用失败，降级为检索回答: %s", e)
+        return answer_from_search_only(query, results)
+    from engine.model_degradation import record_llm_success
+    record_llm_success("curator")
 
     # Step 4: Build citations
     citations = [

@@ -248,14 +248,26 @@ def fill_analysis(ir: ReportIR, retry_hint: list[str] | None = None) -> ReportIR
 6. 不要输出 Markdown 格式，纯文本即可
 7. 只输出 JSON，不要额外解释{hint_text}"""
 
+    # 补 wall-clock 超时：Daily Report 的 LLM 调用此前是裸调用（无超时保护），
+    # 失败/超时记录降级状态并抛异常 → 外层 _build_ir_and_markdown 走模板回退。
+    from engine._compat import call_with_timeout
+    from engine.model_degradation import record_llm_failure, record_llm_success
     client, model = get_llm("deepseek")
-    response = client.chat.completions.create(
-        model=model,
-        max_tokens=1536 if ir.report_type == "monthly" else 1024,
-        temperature=0.4,
-        timeout=90,
-        messages=[{"role": "user", "content": prompt}],
-    )
+
+    def _call():
+        return client.chat.completions.create(
+            model=model,
+            max_tokens=1536 if ir.report_type == "monthly" else 1024,
+            temperature=0.4,
+            timeout=90,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+    response, err = call_with_timeout(_call, 90)
+    if err:
+        record_llm_failure("daily_report", err)
+        raise RuntimeError(f"日报 LLM 调用失败: {err}")
+    record_llm_success("daily_report")
     raw = response.choices[0].message.content
 
     try:

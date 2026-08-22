@@ -156,7 +156,7 @@ def annotate(raw: RawData, keyword_context: str = "",
             relevance_reason=f"Sentinel fast_track: {sentinel_result.rule_hits}",
         )
 
-    from engine.annotate import build_system_prompt, format_user_message, annotate_one, load_config
+    from engine.annotate import build_system_prompt, format_user_message, annotate_with_fallback, load_config
 
     engine_input = rawdata_to_engine_dict(raw)
     config = load_config()
@@ -169,16 +169,24 @@ def annotate(raw: RawData, keyword_context: str = "",
             "请同时判断此内容是否与关键词相关。如果无关，在\"分流建议\"中给出\"忽略\"。"
         )
 
-    result = annotate_one(user_msg, system_prompt, config)
+    result, degraded, reason = annotate_with_fallback(
+        user_msg, system_prompt, config, sentinel_result)
 
-    if result.get("error"):
-        # Fallback: return mock-like annotation with error info
-        return Annotation(
-            url=raw.url, platform=raw.platform,
-            severity="P2", severity_reason=f"[LLM error: {result.get('message', 'unknown')}]",
-            sentiment="中性", risk_tags=[], triage="内部研判", comment_risk="绿",
-            summary=f"[Error] {raw.title[:80]}" if raw.title else "[Error]",
-        )
+    if degraded:
+        if result.get("error"):
+            # 全 LLM 失败 + 无 sentinel → 兜底 mock（degraded 标记，区别于正常标注）
+            annotation = Annotation(
+                url=raw.url, platform=raw.platform,
+                severity="P3", severity_reason=f"[LLM 降级] {reason}",
+                sentiment="中性", risk_tags=[], triage="内部研判", comment_risk="绿",
+                summary=f"[Error] {raw.title[:80]}" if raw.title else "[Error]",
+            )
+        else:
+            # Sentinel 规则预标注 dict → 转换（粗粒度，degraded 标记）
+            annotation = _engine_result_to_annotation(result, raw.url, raw.platform, keyword_context)
+        annotation.degraded = True
+        annotation.degraded_reason = reason
+        return annotation
 
     annotation = _engine_result_to_annotation(result, raw.url, raw.platform, keyword_context)
 

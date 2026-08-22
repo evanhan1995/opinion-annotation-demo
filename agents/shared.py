@@ -157,6 +157,9 @@ class Annotation:
     risk_tags_controlled: list[str] = None  # 受控风险标签
     risk_tags_candidate: list[str] = None   # 候选风险标签
     target_type: str = "我方"  # 目标类型: 我方/竞品/行业
+    # 降级标记：LLM 调用/解析失败降级（Sentinel 预标注 / 兜底 mock）时置 True
+    degraded: bool = False
+    degraded_reason: str = ""
 
     def __post_init__(self):
         if self.secondary_threads is None:
@@ -331,4 +334,9 @@ def annotation_to_engine_dict(ann: Annotation) -> dict:
         result["风险标签_候选"] = ann.risk_tags_candidate
     if ann.target_type and ann.target_type != "我方":
         result["目标类型"] = ann.target_type
+    # 降级标记：仅 degraded=True 时写入 engine dict（保持正常 case 干净），
+    # 由 ingestor 写进案例 frontmatter。
+    if ann.degraded:
+        result["degraded"] = True
+        result["degraded_reason"] = ann.degraded_reason
     return result
