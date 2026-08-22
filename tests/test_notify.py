@@ -125,47 +125,6 @@ def test_send_feishu_card_skips_placeholder_url(monkeypatch):
     urlopen.assert_not_called()
 
 
-def test_send_new_pending_case_card_posts_metrics(tmp_path, monkeypatch):
-    _write_config(tmp_path, [
-        {"name": "群1", "url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
-         "enabled": True, "trigger_level": "P0"},
-    ], monkeypatch)
-    captured = {}
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self):
-            return json.dumps({"code": 0, "msg": "success"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout=10):
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        return FakeResponse()
-
-    with mock.patch.object(notify.urllib.request, "urlopen", side_effect=fake_urlopen):
-        sent = notify.send_new_pending_case_card(
-            url="https://example.com/post/1",
-            comments=12345,
-            likes=678,
-            collects=90,
-            shares=12,
-        )
-
-    assert sent == 1
-    card = captured["body"]["card"]
-    content = card["elements"][0]["text"]["content"]
-    assert "有新的待处理case" in content
-    assert "链接：https://example.com/post/1" in content
-    assert "评论：12,345" in content
-    assert "点赞：678" in content
-    assert "收藏：90" in content
-    assert "转发：12" in content
-
-
 def test_metric_text_fallback():
     assert notify._metric_text(None) == "0"
     assert notify._metric_text("") == "0"
@@ -197,3 +156,118 @@ def test_send_severity_card_respects_trigger_level(tmp_path, monkeypatch):
 
     assert sent == 1
     assert hits == ["https://x/hook/all"]
+
+
+def test_send_annotated_case_card_contains_annotation_fields(tmp_path, monkeypatch):
+    """录入研判通知应携带严重度/分流建议/情感/摘要等研判字段。"""
+    _write_config(tmp_path, [
+        {"name": "群1", "url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
+         "enabled": True, "trigger_level": "P0"},
+    ], monkeypatch)
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"code": 0, "msg": "success"}).encode("utf-8")
+
+    def fake_urlopen(req, timeout=10):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    with mock.patch.object(notify.urllib.request, "urlopen", side_effect=fake_urlopen):
+        sent = notify.send_annotated_case_card(
+            annotation_result={
+                "严重度评级": "P1", "分流建议": "持续观察",
+                "情感分析": {"整体情感": "负面"}, "摘要": "某产品被投诉",
+                "风险标签": ["产品质量", "消费者投诉"],
+            },
+            scraped_data={"来源平台": "小红书", "原文内容": "原始内容"},
+            url="https://example.com/post/1",
+        )
+
+    assert sent == 1
+    card = captured["body"]["card"]
+    assert card["header"]["template"] == "blue"
+    content = card["elements"][0]["text"]["content"]
+    assert "严重度" in content and "P1" in content
+    assert "分流建议" in content and "持续观察" in content
+    assert "情感" in content and "负面" in content
+    assert "某产品被投诉" in content
+    assert "产品质量" in content
+
+
+def test_send_annotated_case_card_urgent_uses_red(tmp_path, monkeypatch):
+    """分流建议=立即处理 → 红色 error 紧急处置卡。"""
+    _write_config(tmp_path, [
+        {"name": "群1", "url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
+         "enabled": True, "trigger_level": "P0"},
+    ], monkeypatch)
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"code": 0, "msg": "success"}).encode("utf-8")
+
+    def fake_urlopen(req, timeout=10):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    with mock.patch.object(notify.urllib.request, "urlopen", side_effect=fake_urlopen):
+        sent = notify.send_annotated_case_card(
+            annotation_result={"严重度评级": "P0", "分流建议": "立即处理", "摘要": "严重事故"},
+            scraped_data={"来源平台": "微博"},
+            url="https://example.com/post/2",
+        )
+
+    assert sent == 1
+    card = captured["body"]["card"]
+    assert card["header"]["template"] == "red"
+    assert "严重事故" in card["elements"][0]["text"]["content"]
+
+
+def test_ingest_notify_switch(tmp_path, monkeypatch):
+    """ingest 默认不通知，notify=True 时才推送（通知绑定录入研判提交）。"""
+    import engine.ingestor as ing
+    import engine.index_mgr as idxmgr
+
+    calls = []
+    monkeypatch.setattr(notify, "send_annotated_case_card",
+                        lambda **kw: calls.append(kw) or 1)
+
+    # 隔离文件系统写入，避免污染真实 wiki/
+    cases = tmp_path / "cases"
+    cases.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(ing, "CASES_DIR", cases)
+    monkeypatch.setattr(ing, "INDEX_PATH", tmp_path / "index.md")
+    monkeypatch.setattr(ing, "GLOBAL_INDEX_PATH", tmp_path / "global_index.md")
+    monkeypatch.setattr(ing, "LOG_PATH", tmp_path / "log.md")
+    monkeypatch.setattr(ing, "RAW_CASES_DIR", tmp_path / "raw_cases")
+    monkeypatch.setattr(ing, "RAW_ARCHIVE_DIR", tmp_path / "raw_archive")
+    monkeypatch.setattr(ing, "AUTHORS_DIR", tmp_path / "authors")
+    (tmp_path / "global_index.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(idxmgr, "update_case_index", lambda **kw: None)
+
+    scraped = {"原文内容": "内容", "来源平台": "微博", "社媒数据": {}}
+    ann = {"严重度评级": "P2", "分流建议": "持续观察", "摘要": "摘要",
+           "情感分析": {"整体情感": "负面"}}
+
+    # 默认 notify=False → 不通知
+    ing.ingest(scraped, ann, "https://example.com/a")
+    assert len(calls) == 0
+
+    # notify=True → 通知一次
+    ing.ingest(scraped, ann, "https://example.com/b", notify=True)
+    assert len(calls) == 1
+    assert calls[0]["annotation_result"]["严重度评级"] == "P2"

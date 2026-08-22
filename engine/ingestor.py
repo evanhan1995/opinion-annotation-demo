@@ -130,11 +130,14 @@ def ingest(
     notes: str = "",
     init_status: str = "待跟进",
     keyword: str = "",
+    notify: bool = False,
     case_id: str = "",
 ) -> dict:
     """Auto-ingest: generate case from annotation if URL is new.
 
     Args:
+        notify: 是否推送飞书通知。默认 False——巡检自动入库不通知；
+            仅在「录入研判」人工筛选并提交时由 _do_ingest 显式传 True。
         case_id: 由 Orchestrator 统一生成传入（与 Handler.triage 共用同一 id）。
             为空时内部生成（兼容直接调用 engine.ingestor.ingest 的旧路径，如 UI）。
 
@@ -190,36 +193,24 @@ def ingest(
 
     # Notify Feishu when a case enters the library (new URL only — the dedup
     # early-return above means existing URLs never reach here).
-    # - 分流建议 == "立即处理" → red urgent-disposal alert.
-    # - Otherwise, a normal pending case → blue "new pending" card.
-    try:
-        from shared.notify import send_new_pending_case_card, send_urgent_disposal_card
-        social = scraped_data.get("社媒数据", {}) or {}
-        if not isinstance(social, dict):
-            social = {}
-        case_url = url or str(scraped_data.get("原文链接", ""))
-        triage = (annotation_result or {}).get("分流建议", "")
-        if triage == "立即处理":
-            sent = send_urgent_disposal_card(
-                title=str((annotation_result or {}).get("摘要", "") or scraped_data.get("原文内容", ""))[:60],
-                severity=str((annotation_result or {}).get("严重度评级", "")),
-                platform=str(scraped_data.get("来源平台", "")),
+    #
+    # 通知触发点绑定「录入研判」提交动作：仅当 notify=True（由 _do_ingest 传入）
+    # 才推送。巡检自动入库（pipeline / run_active_monitor）始终 notify=False，
+    # 不产生任何飞书通知——避免巡检抓取的无效噪音污染研判。
+    if notify:
+        try:
+            from shared.notify import send_annotated_case_card
+            case_url = url or str(scraped_data.get("原文链接", ""))
+            sent = send_annotated_case_card(
+                annotation_result=annotation_result,
+                scraped_data=scraped_data,
                 url=case_url,
+                init_status=init_status,
             )
             if sent == 0:
-                _log.warning("飞书紧急处置通知未送达（0 个 webhook 接受），case_url=%s", case_url[:60])
-        elif init_status == "待跟进":
-            sent = send_new_pending_case_card(
-                url=case_url,
-                comments=social.get("评论", 0),
-                likes=social.get("点赞", 0),
-                collects=social.get("收藏", 0),
-                shares=social.get("转发", 0),
-            )
-            if sent == 0:
-                _log.warning("飞书新案例通知未送达（0 个 webhook 接受），case_url=%s", case_url[:60])
-    except Exception as e:
-        _log.exception("飞书通知发送异常: %s", e)
+                _log.warning("飞书研判入库通知未送达（0 个 webhook 接受），case_url=%s", case_url[:60])
+        except Exception as e:
+            _log.exception("飞书通知发送异常: %s", e)
 
     return {
         "action": "case_generated",

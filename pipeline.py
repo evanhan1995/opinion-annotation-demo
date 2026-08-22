@@ -313,68 +313,11 @@ def _run_pipeline():
                          progress=1.0)
         except Exception as e:
             _update_step("daily_report", "error", error=str(e))
-        # ── Pipeline completion notification ──
-        _notify_pipeline_complete(harvest, severity_counts)
+        # 通知不再绑定「巡检任务完成」事件：巡检抓取阶段不推送任何飞书通知。
+        # 飞书通知统一由「录入研判」人工提交（_do_ingest → ingest(notify=True)）触发。
 
     finally:
         _finalize(start_time)
-
-
-def _notify_pipeline_complete(harvest, severity_counts: dict):
-    """Send pipeline completion summary to Feishu bot."""
-    try:
-        from shared.notify import send_feishu_card
-    except ImportError:
-        return
-
-    if harvest is None:
-        return
-
-    if not hasattr(harvest, "keyword_results") or harvest.keyword_results is None:
-        return
-
-    # Collect keywords
-    keywords = []
-    for kr in harvest.keyword_results:
-        if kr.keyword not in keywords:
-            keywords.append(kr.keyword)
-    kw_str = "、".join(keywords) if keywords else "N/A"
-
-    # Step statuses
-    step_lines = []
-    with _lock:
-        for step in _pipeline_status.steps:
-            icon_map = {"done": "✅", "error": "❌", "pending": "⏭️"}
-            icon = icon_map.get(step.status, "⏳")
-            detail = step.details if step.details else step.status
-            step_lines.append(f"{icon} {step.label}: {detail}")
-
-    # Determine level
-    if severity_counts.get("P0", 0) > 0:
-        level = "error"
-    elif severity_counts.get("P1", 0) > 0:
-        level = "warning"
-    else:
-        level = "success"
-
-    body = (
-        f"**关键词**: {kw_str}\n"
-        f"**抓取总数**: {harvest.total_fetched} 条\n"
-        f"**新增入库**: {harvest.total_new} 条\n"
-        "\n" + "\n".join(step_lines)
-    )
-
-    send_feishu_card(
-        title=f"舆情巡检完成 — {kw_str}",
-        body_text=body,
-        fields={
-            "P0": str(severity_counts.get("P0", 0)),
-            "P1": str(severity_counts.get("P1", 0)),
-            "P2": str(severity_counts.get("P2", 0)),
-            "P3": str(severity_counts.get("P3", 0)),
-        },
-        level=level,
-    )
 
 
 def _finalize(start_time: float):

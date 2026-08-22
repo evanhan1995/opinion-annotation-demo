@@ -274,7 +274,7 @@ class TestDoIngest:
 
     def test_ingest_success_passes_through(self, monkeypatch):
         """Successful ingest returns the ingest result dict."""
-        def _ok(scraped, annotation, url, init_status="待跟进"):
+        def _ok(scraped, annotation, url, init_status="待跟进", notify=False):
             return {"action": "case_generated", "case_file": "case-099.md",
                     "boundary_check": {}, "boundary_suggestions": []}
 
@@ -290,8 +290,9 @@ class TestDoIngest:
         """分流建议 映射为正确的 init_status."""
         captured_status = {}
 
-        def _capture(scraped, annotation, url, init_status="待跟进"):
+        def _capture(scraped, annotation, url, init_status="待跟进", notify=False):
             captured_status["init_status"] = init_status
+            captured_status["notify"] = notify
             return {"action": "case_generated", "case_file": "case-099.md",
                     "boundary_check": {}, "boundary_suggestions": []}
 
@@ -302,6 +303,7 @@ class TestDoIngest:
         # 立即处理 → 待跟进
         _do_ingest({"原文内容": "x"}, {"严重度评级": "P1", "分流建议": "立即处理"}, "")
         assert captured_status["init_status"] == "待跟进"
+        assert captured_status["notify"] is True  # 录入研判提交须触发通知
 
         # 可忽略 → 忽略
         captured_status.clear()

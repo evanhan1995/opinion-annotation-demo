@@ -606,7 +606,9 @@ def _do_ingest(scraped_data: dict, annotation_result: dict, url: str = "") -> di
     action = annotation_result.get("分流建议", "")
     init_status = _ACTION_STATUS_MAP.get(action, "待跟进")
     try:
-        result = ingest(scraped_data, annotation_result, url, init_status=init_status)
+        # notify=True：飞书通知绑定「录入研判」人工提交动作。人工筛选通过并
+        # 完成录入研判后才推送（通知内容含研判字段）；巡检自动入库不经过此路径。
+        result = ingest(scraped_data, annotation_result, url, init_status=init_status, notify=True)
     except Exception as e:
         result = {"action": "error", "case_file": None, "boundary_check": {}, "_ingest_error": str(e)}
     # Track save in session_state so sidebar stats update reliably

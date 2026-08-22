@@ -170,27 +170,12 @@ def _metric_text(value) -> str:
         return "0"
 
 
-def send_new_pending_case_card(url: str = "", comments: int = 0, likes: int = 0,
-                               collects: int = 0, shares: int = 0) -> int:
-    """Notify Feishu when a new pending case enters the knowledge base."""
-    body = (
-        "**有新的待处理case**\n\n"
-        f"链接：{url or '暂无'}\n"
-        f"评论：{_metric_text(comments)}\n"
-        f"点赞：{_metric_text(likes)}\n"
-        f"收藏：{_metric_text(collects)}\n"
-        f"转发：{_metric_text(shares)}"
-    )
-    return send_feishu_card(title="📥 有新的待处理case", body_text=body, level="info")
-
-
 def send_urgent_disposal_card(title: str = "", severity: str = "", platform: str = "",
                               url: str = "") -> int:
     """Notify Feishu (red/error) when a case is marked 立即处理 (urgent disposal).
 
-    Distinct from send_new_pending_case_card: this fires on the 分流建议=立即处理
-    action regardless of whether the URL is already ingested, so a human
-    escalation always produces a visible alert.
+    Fires on the 分流建议=立即处理 action regardless of whether the URL is
+    already ingested, so a human escalation always produces a visible alert.
     """
     body = (
         "**舆情需立即处置**\n\n"
@@ -200,3 +185,46 @@ def send_urgent_disposal_card(title: str = "", severity: str = "", platform: str
         f"链接：{url or '暂无'}"
     )
     return send_feishu_card(title="舆情需立即处置", body_text=body, level="error")
+
+
+def send_annotated_case_card(annotation_result: dict, scraped_data: dict,
+                             url: str = "", init_status: str = "待跟进") -> int:
+    """推送「录入研判完成」后的飞书通知，内容以研判结果字段为主。
+
+    （相比仅原始互动数据的旧通知）本函数携带严重度 / 分流建议 / 情感 /
+    摘要等 AI 研判字段，供研判人员直接判断是否跟进。
+
+    - 分流建议 == 立即处理 → 红色 error 紧急处置卡。
+    - 其他（持续观察 / 正面可利用 / 可忽略）→ 蓝色 info 研判卡。
+    """
+    annotation = annotation_result if isinstance(annotation_result, dict) else {}
+    scraped = scraped_data if isinstance(scraped_data, dict) else {}
+
+    severity = str(annotation.get("严重度评级", "") or "?")
+    triage = str(annotation.get("分流建议", "") or "?")
+    summary = str(annotation.get("摘要", "") or scraped.get("原文内容", "") or "无标题")[:60]
+    platform = str(scraped.get("来源平台", "") or "未知")
+    case_url = url or str(scraped.get("原文链接", "") or "暂无")
+
+    emo = annotation.get("情感分析") or {}
+    sentiment = str(emo.get("整体情感", "") or "") if isinstance(emo, dict) else ""
+    tags = annotation.get("风险标签", [])
+    tag_str = "、".join(str(t) for t in tags[:3]) if isinstance(tags, list) and tags else "无"
+
+    if triage == "立即处理":
+        return send_urgent_disposal_card(
+            title=summary, severity=severity, platform=platform, url=case_url,
+        )
+
+    body = (
+        f"**摘要**：{summary}\n"
+        f"**严重度**：{severity}  **分流建议**：{triage}\n"
+        f"**情感**：{sentiment or '未知'}  **平台**：{platform}\n"
+        f"**风险标签**：{tag_str}\n"
+        f"**链接**：{case_url}"
+    )
+    return send_feishu_card(
+        title=f"📥 新案例已研判入库 — {severity}",
+        body_text=body,
+        level="info",
+    )

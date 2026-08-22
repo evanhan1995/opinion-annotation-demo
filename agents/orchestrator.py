@@ -47,8 +47,14 @@ class PipelineResult:
 
 
 # ── Notification dispatch (PRD §3.6) ───────────────────────────────────
-def _dispatch_emergency(annotation: Annotation) -> bool:
-    """Deliver P0/P1 emergency alert via desktop popup + webhook."""
+def _dispatch_emergency(annotation: Annotation, notify_feishu: bool = True) -> bool:
+    """Deliver P0/P1 emergency alert via desktop popup + webhook.
+
+    Args:
+        notify_feishu: 是否推送飞书告警。巡检自动链路传 False 以抑制飞书
+            通知（保留本地桌面弹窗）；人工录入研判路径仍会通过 ingest 的
+            send_annotated_case_card 推送红色紧急卡。
+    """
     triggered = False
     severity = annotation.severity
     title = annotation.summary[:60] if annotation.summary else "无标题"
@@ -79,24 +85,25 @@ def _dispatch_emergency(annotation: Annotation) -> bool:
             _log.warning("Desktop alert failed: %s", e)
 
     # Webhook dispatch — send only to webhooks whose trigger_level covers severity
-    try:
-        from shared.notify import send_severity_card
-        title = annotation.summary[:100] if annotation.summary else "无标题"
-        tags_str = ", ".join(annotation.risk_tags) if annotation.risk_tags else "无"
-        body = (
-            f"**{title}**\n\n"
-            f"平台: {annotation.platform} | 风险: {tags_str}\n"
-            f"分流建议: {annotation.triage}\n"
-            f"[查看原文]({annotation.url})"
-        )
-        sent = send_severity_card(
-            title=f"舆情{annotation.severity}告警",
-            body_text=body,
-            severity=annotation.severity,
-        )
-        triggered = triggered or sent > 0
-    except Exception as e:
-        _log.warning("Webhook dispatch failed: %s", e)
+    if notify_feishu:
+        try:
+            from shared.notify import send_severity_card
+            title = annotation.summary[:100] if annotation.summary else "无标题"
+            tags_str = ", ".join(annotation.risk_tags) if annotation.risk_tags else "无"
+            body = (
+                f"**{title}**\n\n"
+                f"平台: {annotation.platform} | 风险: {tags_str}\n"
+                f"分流建议: {annotation.triage}\n"
+                f"[查看原文]({annotation.url})"
+            )
+            sent = send_severity_card(
+                title=f"舆情{annotation.severity}告警",
+                body_text=body,
+                severity=annotation.severity,
+            )
+            triggered = triggered or sent > 0
+        except Exception as e:
+            _log.warning("Webhook dispatch failed: %s", e)
     return triggered
 
 
@@ -215,13 +222,17 @@ def reset_scraper_failures(platform: str = ""):
 def run_passive_analysis(url: str, pipeline_notes: str = "",
                          progress_callback=None,
                          init_status: str = "待跟进",
-                         keyword_context: str = "") -> PipelineResult:
+                         keyword_context: str = "",
+                         notify_feishu: bool = False) -> PipelineResult:
     """User submits a URL → full pipeline: Scraper → Analyst → Handler → Curator.
 
     Args:
         progress_callback: Optional callable(stage: str, details: str) for
             sub-step progress reporting (e.g. pipeline UI).
         keyword_context: The monitor keyword that triggered this URL (empty if manual).
+        notify_feishu: 是否推送飞书通知。默认 False——巡检抓取阶段不通知；
+            仅人工「录入研判」提交（_do_ingest）路径会传 True。P0/P1 熔断
+            与 case 入库通知均受此开关控制。
     """
     started = datetime.now().isoformat()
     errors = []
@@ -301,7 +312,7 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
     # P0/P1 meltdown
     emergency = False
     if annotation.severity in ("P0", "P1"):
-        emergency = emergency_dispatch(annotation)
+        emergency = emergency_dispatch(annotation, notify_feishu=notify_feishu)
 
     # ── Stage 3: Handler ──────────────────────────────────────────────
     if progress_callback:
@@ -325,7 +336,7 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
         from agents.curator import ingest
         kb_entry = ingest(raw, annotation, notes=pipeline_notes,
                           init_status=init_status, keyword=keyword_context,
-                          case_id=case_id)
+                          notify=notify_feishu, case_id=case_id)
     except Exception as e:
         errors.append(f"Curator error: {e}")
         kb_entry = None
@@ -528,6 +539,6 @@ def _log_disposition_timeline(case_id: str, from_status: str, to_status: str,
 
 
 # ── Emergency dispatch (called inline during pipeline) ─────────────────
-def emergency_dispatch(annotation: Annotation) -> bool:
+def emergency_dispatch(annotation: Annotation, notify_feishu: bool = True) -> bool:
     """PRD §3.6: P0/P1 immediate alert. Call from pipeline when severity in {P0, P1}."""
-    return _dispatch_emergency(annotation)
+    return _dispatch_emergency(annotation, notify_feishu=notify_feishu)
