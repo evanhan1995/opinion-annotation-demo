@@ -413,14 +413,18 @@ def _push_daily_report_feishu(date_str: str) -> None:
     scheduler pushed.  Never raises: notification failure must not fail report
     generation.
 
-    The card content is built by DailyReport.build_daily_feishu_summary() from
-    the same 当日 ReportData as the generated report, so the numbers match the
-    actual daily report (not all-time totals).
+    Card content is rendered from the SAME cached FinalReport that the report
+    Tab reads (single source of truth) — no independent content generation.
     """
     try:
         from shared.notify import send_feishu_card
-        from agents.daily_report import build_daily_feishu_summary
-        title, body_text, fields = build_daily_feishu_summary(date_str)
+        from shared.report_renderers import render_feishu
+        from engine.report_model import load_final_report
+        fr = load_final_report("daily", date_str)
+        if fr is None:
+            _log.warning("日报 FinalReport 未找到，无法推送飞书：date=%s", date_str)
+            return
+        title, body_text, fields = render_feishu(fr)
         sent = send_feishu_card(
             title=title, body_text=body_text, fields=fields, level="info",
         )
@@ -428,6 +432,29 @@ def _push_daily_report_feishu(date_str: str) -> None:
             _log.warning("日报飞书推送未送达（0 个 webhook 接受），date=%s", date_str)
     except Exception as e:
         _log.warning("日报飞书推送异常: %s", e)
+
+
+def push_daily_report(date_str: str = "") -> int:
+    """只重推已缓存的日报，不重新 collect/LLM（"只重推不重生成"入口）。
+
+    从 wiki/reports/daily/{date}.report.json 读 FinalReport 并推飞书。
+    返回送达的 webhook 数（无缓存或未配置 webhook 时返回 0）。
+    """
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        from shared.notify import send_feishu_card
+        from shared.report_renderers import render_feishu
+        from engine.report_model import load_final_report
+        fr = load_final_report("daily", date_str)
+        if fr is None:
+            _log.warning("日报 FinalReport 未找到，无法重推：date=%s", date_str)
+            return 0
+        title, body_text, fields = render_feishu(fr)
+        return send_feishu_card(title=title, body_text=body_text, fields=fields, level="info")
+    except Exception as e:
+        _log.warning("日报重推异常: %s", e)
+        return 0
 
 
 def run_daily_report(date_str: str = "") -> str:

@@ -1,12 +1,33 @@
 # -*- coding: utf-8 -*-
 """Tab 6: Reports Viewer — daily and monthly report browsing."""
 
+import logging
 import streamlit as st
 from pathlib import Path
+
+_log = logging.getLogger("yuqing")
 
 WIKI_DIR = Path(__file__).resolve().parent.parent / "wiki"
 REPORTS_DAILY = WIKI_DIR / "reports" / "daily"
 REPORTS_MONTHLY = WIKI_DIR / "reports" / "monthly"
+
+
+def _read_report_markdown(report_type: str, date_str: str, md_path: Path) -> str:
+    """优先读 FinalReport 缓存（.report.json），缺则回退 .md（兼容历史报告）。
+
+    区分两种情况（沿用任务2「静默吞错修复」标准）：
+      - 缓存缺失或为空（确实无缓存内容）→ 正常回退 .md，不记日志。
+      - 读取缓存抛异常（读取失败）→ logging.exception 记录完整堆栈后回退 .md。
+    """
+    try:
+        from engine.report_model import load_final_report
+        fr = load_final_report(report_type, date_str)
+        if fr is not None and fr.markdown:
+            from shared.report_renderers import render_web
+            return render_web(fr)
+    except Exception as e:
+        _log.exception("读取报告缓存失败，回退 .md: type=%s date=%s: %s", report_type, date_str, e)
+    return md_path.read_text(encoding="utf-8")
 
 
 def render_tab6():
@@ -38,7 +59,7 @@ def _render_daily_reports():
 
     selected = st.selectbox("选择日期", dates, key="daily_date_select")
     if selected:
-        content = (REPORTS_DAILY / f"{selected}.md").read_text(encoding="utf-8")
+        content = _read_report_markdown("daily", selected, REPORTS_DAILY / f"{selected}.md")
         st.markdown(content)
 
     # Show post-rerun message (st.success is cleared by st.rerun)
@@ -72,7 +93,7 @@ def _render_monthly_reports():
 
     selected = st.selectbox("选择月份", months, key="monthly_date_select")
     if selected:
-        content = (REPORTS_MONTHLY / f"{selected}.md").read_text(encoding="utf-8")
+        content = _read_report_markdown("monthly", selected, REPORTS_MONTHLY / f"{selected}.md")
         st.markdown(content)
 
     # Show post-rerun message

@@ -70,118 +70,111 @@ def _trend(current: int, avg: float) -> str:
     return "→"
 
 
-# ── build_ir ────────────────────────────────────────────────────────────
+# ── Module builders registry（模板锚点 → 数据绑定） ──────────────────────
+# 模板 JSON 只存锚点 key；数据如何绑定由内置注册表决定。
+# （与 render_kind="custom" 走 RENDERER_REGISTRY 白名单同理：模板不携带可执行引用。）
 
-def build_ir(data, report_type: str) -> ReportIR:
-    """Build IR skeleton from ReportData. All data_rows filled by code, analysis left empty.
+def _build_volume(data, report_type):
+    avg = getattr(data, "avg_prev_7days", 0.0)
+    return ({"total_new_cases": data.total_new_cases, "avg_prev_7days": avg,
+             "trend": _trend(data.total_new_cases, avg)}, None)
 
-    Args:
-        data: ReportData (from agents.daily_report._collect_report_data)
-        report_type: "daily" or "monthly"
 
-    Returns ReportIR with data_rows populated and analysis fields empty.
-    """
-    ir = ReportIR(
-        report_type=report_type,
-        date=data.date,
-        metadata={"generator": "舆情标注Wiki", "generated_at": datetime.now().isoformat()},
-    )
-
-    # Chapter 1: 声量概览
-    vol_title = "一、月度声量趋势" if report_type == "monthly" else "一、声量概览"
-    ch1 = Chapter(
-        anchor="volume-overview",
-        title=vol_title,
-        data_rows={
-            "total_new_cases": data.total_new_cases,
-            "avg_prev_7days": getattr(data, "avg_prev_7days", 0.0),
-            "trend": _trend(data.total_new_cases, getattr(data, "avg_prev_7days", 0.0)),
-        },
-    )
-    ir.chapters.append(ch1)
-
-    # Chapter 2: 情感分布
+def _build_sentiment(data, report_type):
     pos_n = data.sentiment_dist.get("正面", 0)
     neu_n = data.sentiment_dist.get("中性", 0)
     neg_n = data.sentiment_dist.get("负面", 0)
-    ir.chapters.append(Chapter(
-        anchor="sentiment",
-        title="二、情感分布",
-        data_rows={
-            "positive_pct": _pct(data.sentiment_dist, "正面"),
-            "neutral_pct": _pct(data.sentiment_dist, "中性"),
-            "negative_pct": _pct(data.sentiment_dist, "负面"),
-            "positive_n": pos_n, "neutral_n": neu_n, "negative_n": neg_n,
-        },
-        chart={"type": "pie", "labels": ["正面", "中性", "负面"], "values": [pos_n, neu_n, neg_n]},
-    ))
+    return ({"positive_pct": _pct(data.sentiment_dist, "正面"),
+             "neutral_pct": _pct(data.sentiment_dist, "中性"),
+             "negative_pct": _pct(data.sentiment_dist, "负面"),
+             "positive_n": pos_n, "neutral_n": neu_n, "negative_n": neg_n},
+            {"type": "pie", "labels": ["正面", "中性", "负面"], "values": [pos_n, neu_n, neg_n]})
 
-    # Chapter 3: 关键议题
-    ir.chapters.append(Chapter(
-        anchor="top-issues",
-        title="三、关键议题 TOP5",
-        data_rows={"items": data.top_issues},
-    ))
 
-    # Chapter 4: 风险分级
+def _build_top_issues(data, report_type):
+    return ({"items": data.top_issues}, None)
+
+
+def _build_severity(data, report_type):
     sevs = ["P0", "P1", "P2", "P3"]
-    sev_dr = {}
+    dr = {}
     for s in sevs:
-        sev_dr[f"{s.lower()}_count"] = data.severity_dist.get(s, 0)
-        sev_dr[f"{s.lower()}_pct"] = _pct(data.severity_dist, s)
-    sev_dr["p0p1_events"] = data.p0_p1_list
-    sev_title = "四、风险分级月度汇总" if report_type == "monthly" else "四、风险分级"
-    ir.chapters.append(Chapter(
-        anchor="severity",
-        title=sev_title,
-        data_rows=sev_dr,
-        chart={"type": "bar", "labels": sevs,
-               "values": [data.severity_dist.get(s, 0) for s in sevs]},
-    ))
+        dr[f"{s.lower()}_count"] = data.severity_dist.get(s, 0)
+        dr[f"{s.lower()}_pct"] = _pct(data.severity_dist, s)
+    dr["p0p1_events"] = data.p0_p1_list
+    return (dr, {"type": "bar", "labels": sevs,
+                 "values": [data.severity_dist.get(s, 0) for s in sevs]})
 
-    # Chapter 5: 平台分布
+
+def _build_platform(data, report_type):
     platforms = list(data.platform_dist.keys())
-    ir.chapters.append(Chapter(
-        anchor="platform",
-        title="五、平台分布",
-        data_rows={"platforms": data.platform_dist},
-        chart={"type": "bar", "labels": platforms,
-               "values": [data.platform_dist[p] for p in platforms]},
-    ))
+    return ({"platforms": data.platform_dist},
+            {"type": "bar", "labels": platforms,
+             "values": [data.platform_dist[p] for p in platforms]})
 
-    # Chapter 6: 处置状态
-    ir.chapters.append(Chapter(
-        anchor="disposition",
-        title="六、处置状态统计",
-        data_rows={
-            "pending": data.status_dist.get("待跟进", 0),
-            "in_progress": data.status_dist.get("处理中", 0),
-            "done": data.status_dist.get("已处理", 0),
-            "abandoned": data.status_dist.get("已放弃", 0),
-            "ignored": data.status_dist.get("忽略", 0),
+
+def _build_disposition(data, report_type):
+    return ({"pending": data.status_dist.get("待跟进", 0),
+             "in_progress": data.status_dist.get("处理中", 0),
+             "done": data.status_dist.get("已处理", 0),
+             "abandoned": data.status_dist.get("已放弃", 0),
+             "ignored": data.status_dist.get("忽略", 0)}, None)
+
+
+def _build_efficiency(data, report_type):
+    return ({"avg_processing_time": data.status_dist.get("avg_processing_time", "暂无"),
+             "completion_rate": data.status_dist.get("completion_rate", "暂无"),
+             "p0_24h_rate": data.status_dist.get("p0_24h_rate", "暂无"),
+             "p1_24h_rate": data.status_dist.get("p1_24h_rate", "暂无")}, None)
+
+
+def _build_suggestions(data, report_type):
+    return ({"top_issues": data.top_issues, "p0p1_list": data.p0_p1_list}, None)
+
+
+MODULE_BUILDERS = {
+    "volume-overview": _build_volume,
+    "sentiment": _build_sentiment,
+    "top-issues": _build_top_issues,
+    "severity": _build_severity,
+    "platform": _build_platform,
+    "disposition": _build_disposition,
+    "efficiency": _build_efficiency,
+    "suggestions": _build_suggestions,
+}
+
+
+def build_ir(data, report_type) -> ReportIR:
+    """Build IR skeleton from ReportData via a template.
+
+    Args:
+        data: ReportData (from agents.daily_report._collect_report_data)
+        report_type: "daily" | "monthly"，或 ReportTemplate 实例。
+
+    Returns ReportIR with data_rows populated and analysis fields empty.
+    模板信息（template_id/version/llm_anchors）写入 ir.metadata。
+    """
+    from engine.report_model import default_template, ReportTemplate
+    template = report_type if isinstance(report_type, ReportTemplate) else default_template(report_type)
+
+    ir = ReportIR(
+        report_type=template.template_type,
+        date=data.date,
+        metadata={
+            "generator": "舆情标注Wiki",
+            "generated_at": datetime.now().isoformat(),
+            "template_id": template.template_id,
+            "template_version": template.version,
+            "llm_anchors": template.llm_anchors(),
         },
-    ))
+    )
 
-    # Monthly-only chapters (7, 8)
-    if report_type == "monthly":
-        ir.chapters.append(Chapter(
-            anchor="efficiency",
-            title="七、处置效率统计",
-            data_rows={
-                "avg_processing_time": data.status_dist.get("avg_processing_time", "暂无"),
-                "completion_rate": data.status_dist.get("completion_rate", "暂无"),
-                "p0_24h_rate": data.status_dist.get("p0_24h_rate", "暂无"),
-                "p1_24h_rate": data.status_dist.get("p1_24h_rate", "暂无"),
-            },
-        ))
-        ir.chapters.append(Chapter(
-            anchor="suggestions",
-            title="八、下月监测建议",
-            data_rows={
-                "top_issues": data.top_issues,
-                "p0p1_list": data.p0_p1_list,
-            },
-        ))
+    for m in template.sorted_modules():
+        builder = MODULE_BUILDERS.get(m.anchor)
+        if builder is None:
+            continue
+        data_rows, chart = builder(data, template.template_type)
+        ir.chapters.append(Chapter(anchor=m.anchor, title=m.title, data_rows=data_rows, chart=chart))
 
     return ir
 
@@ -191,6 +184,14 @@ def build_ir(data, report_type: str) -> ReportIR:
 _LLM_ANCHORS_DAILY = {"volume-overview", "sentiment", "disposition"}
 _LLM_ANCHORS_MONTHLY = {"volume-overview", "sentiment", "severity", "disposition",
                         "efficiency", "suggestions"}
+
+
+def _resolve_llm_anchors(ir: ReportIR) -> set:
+    """从 ir.metadata 读模板定义的 LLM 锚点；缺失时回退历史常量（兼容手工构造的 IR）。"""
+    anchors = (ir.metadata or {}).get("llm_anchors")
+    if anchors:
+        return set(anchors)
+    return _LLM_ANCHORS_MONTHLY if ir.report_type == "monthly" else _LLM_ANCHORS_DAILY
 
 
 def fill_analysis(ir: ReportIR, retry_hint: list[str] | None = None) -> ReportIR:
@@ -204,7 +205,7 @@ def fill_analysis(ir: ReportIR, retry_hint: list[str] | None = None) -> ReportIR
     """
     from agents.shared import get_llm, extract_json
 
-    llm_anchors = _LLM_ANCHORS_MONTHLY if ir.report_type == "monthly" else _LLM_ANCHORS_DAILY
+    llm_anchors = _resolve_llm_anchors(ir)
     need_llm = [ch for ch in ir.chapters if ch.anchor in llm_anchors]
 
     # Compact data context
@@ -291,7 +292,7 @@ def validate_ir(ir: ReportIR) -> tuple[bool, list[str]]:
     Returns (is_valid, list_of_errors).
     """
     errors = []
-    llm_anchors = _LLM_ANCHORS_MONTHLY if ir.report_type == "monthly" else _LLM_ANCHORS_DAILY
+    llm_anchors = _resolve_llm_anchors(ir)
     min_analysis = 20
     min_intro = 10
 
