@@ -85,12 +85,12 @@ def test_analyst_json_parse_failure_triggers_fallback(isolation):
 
 # ── Curator ────────────────────────────────────────────────────────────
 
-def test_curator_ask_agent_degrades_to_search(isolation):
+def test_curator_ask_agent_degrades_to_search(isolation, monkeypatch):
     """ask_agent LLM 抛异常 → answer_from_search_only，degraded=True + ⚠️ 提示。"""
-    ag.search_wiki = lambda *a, **k: [{
+    monkeypatch.setattr(ag, "search_wiki", lambda *a, **k: [{
         "path": "cases/c-1.md", "title": "t1", "type": "case", "dirname": "cases",
         "excerpt": "e1", "score": 10, "content": "x", "frontmatter": {"severity": "P1"},
-    }]
+    }])
     with mock.patch.object(ag, "_call_openai_style", side_effect=Exception("timeout")):
         result = ag.ask_agent("q", {"api_key": "k", "api_base": "b", "api_style": "openai", "agent_model": "m"})
     assert result.get("degraded") is True
@@ -98,9 +98,9 @@ def test_curator_ask_agent_degrades_to_search(isolation):
     assert len(result.get("citations", [])) == 1
 
 
-def test_curator_ask_agent_success_marks_recovered(isolation):
+def test_curator_ask_agent_success_marks_recovered(isolation, monkeypatch):
     """LLM 成功 → record_llm_success 被调用（degraded 状态被清除）。"""
-    ag.search_wiki = lambda *a, **k: []
+    monkeypatch.setattr(ag, "search_wiki", lambda *a, **k: [])
     md.record_llm_failure("curator", "x")
     md.record_llm_failure("curator", "x")
     assert md.is_llm_degraded("curator") is True

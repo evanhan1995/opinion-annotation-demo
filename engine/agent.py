@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine._compat import call_with_timeout
+from engine.constants import PLATFORM_KEY_TO_LABEL, normalize_platform
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ENGINE_DIR.parent
@@ -209,18 +210,72 @@ def search_wiki(query: str, max_results: int = 5) -> list[dict]:
 
     Uses embedding similarity when available, falls back to bigram token matching.
     Returns list of dicts: {path, title, type, dirname, excerpt, score, content}
-    Sorted by relevance score descending.
+    Sorted by relevance score descending. 查询里明确提到平台/严重度时，
+    对命中的案例做温和元数据加权（见 _weight_search_results）。
     """
     # Phase 2: try embedding-based hybrid search first
     results = _embedding_search(query, max_results)
     if results is not None:
         if results:
             _log.info("Embedding search returned %d results for: %s", len(results), query[:80])
-        return results
+        return _weight_search_results(query, results)
 
     # Fallback: bigram keyword search (Phase 1)
     _log.info("Embedding search unavailable, falling back to bigram for: %s", query[:80])
-    return _bigram_search(query, max_results)
+    return _weight_search_results(query, _bigram_search(query, max_results))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 元数据加权（查询里明确提到平台/严重度时，温和加权同平台/同严重度案例）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SEVERITY_BOOST = 1.3
+_PLATFORM_BOOST = 1.3
+_SEVERITY_CODES = ("P0", "P1", "P2", "P3")
+
+
+def _detect_query_severities(query: str) -> set[str]:
+    """识别查询里出现的严重度代码（P0-P3），大小写不敏感。"""
+    upper = query.upper()
+    return {s for s in _SEVERITY_CODES if s in upper}
+
+
+def _detect_query_platforms(query: str) -> set[str]:
+    """识别查询里提到的平台（中英文都覆盖），返回归一化后的中文平台名集合。"""
+    query_lower = query.lower()
+    aliases = set(PLATFORM_KEY_TO_LABEL.keys()) | set(PLATFORM_KEY_TO_LABEL.values())
+    found = set()
+    for alias in aliases:
+        if len(alias) >= 2 and alias.lower() in query_lower:
+            found.add(normalize_platform(alias))
+    return found
+
+
+def _weight_search_results(query: str, results: list[dict]) -> list[dict]:
+    """对 search_wiki 结果做元数据加权重排（只作用于 cases，不改动其他 wiki 内容）。
+
+    查询里命中平台关键词 → 同平台案例 ×1.3；命中严重度代码 → 同严重度案例 ×1.3；
+    两者都命中则相乘（≈1.69）。无关键词命中时原样返回，保证与改动前完全一致。
+    """
+    sevs = _detect_query_severities(query)
+    plats = _detect_query_platforms(query)
+    if not sevs and not plats:
+        return results
+
+    for r in results:
+        if r.get("dirname") != "cases":
+            continue
+        fm = r.get("frontmatter") or {}
+        factor = 1.0
+        if sevs and fm.get("severity") in sevs:
+            factor *= _SEVERITY_BOOST
+        if plats and normalize_platform(fm.get("platform", "")) in plats:
+            factor *= _PLATFORM_BOOST
+        if factor != 1.0:
+            r["score"] = round(r["score"] * factor, 2)
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

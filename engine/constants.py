@@ -24,6 +24,18 @@ PLATFORM_KEY_TO_LABEL = {
 
 PLATFORM_LABEL_TO_KEY = {v: k for k, v in PLATFORM_KEY_TO_LABEL.items()}
 
+
+def normalize_platform(name: str) -> str:
+    """把平台名归一化为中文标签（douyin→抖音, wechat→微信公众号, 抖音→抖音）。
+
+    复用 PLATFORM_KEY_TO_LABEL 的英文 key→中文 value 映射；已是中文名则原样返回。
+    供检索加权等场景识别中英文两种平台写法是否为同一平台。
+    """
+    if not name:
+        return name
+    return PLATFORM_KEY_TO_LABEL.get(name, name)
+
+
 # ── Platform abbreviation (Chinese label → short key for filenames) ────────
 PLATFORM_ABBREV = {
     "小红书": "xhs",
