@@ -921,8 +921,14 @@ def _scrape_wechat(url: str, timeout: int = 30000) -> dict:
             except Exception as e:
                 _log.debug("微信正文(.rich_media_content)提取失败: %s", e)
 
+        body = content[:3000] if content else ""
+        if title:
+            raw_content = f"标题：{title}\n\n{body}" if body else f"标题：{title}"
+        else:
+            raw_content = body
+
         return {
-            "原文内容": content[:3000] if content else f"标题：{title}",
+            "原文内容": raw_content,
             "发布时间": publish_time,
             "来源平台": "微信公众号",
             "发布者类型": f"公众号: {author}" if author else "未知",

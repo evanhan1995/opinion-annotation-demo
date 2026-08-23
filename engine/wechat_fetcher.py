@@ -189,8 +189,16 @@ def _extract_wechat_page(page, url: str) -> dict:
     publish_time = _txt("em#publish_time") or _txt(".rich_media_meta_text")
     content = _txt("#js_content") or _txt(".rich_media_content")
 
+    body = content[:3000] if content else ""
+    if title:
+        # 标题非空时用「标题：」前缀，让 engine_dict_to_rawdata 能解析出 RawData.title；
+        # 标题为空时不加前缀，保证正文格式一致（避免哈希不稳定）。
+        raw_content = f"标题：{title}\n\n{body}" if body else f"标题：{title}"
+    else:
+        raw_content = body
+
     return {
-        "原文内容": content[:3000] if content else f"标题：{title}",
+        "原文内容": raw_content,
         "发布时间": publish_time,
         "来源平台": "微信公众号",
         "发布者类型": f"公众号: {author}" if author else "未知",
