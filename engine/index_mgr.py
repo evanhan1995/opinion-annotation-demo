@@ -68,7 +68,7 @@ _OVERVIEW_HEADERS_CORRECTION = ["案例", "标题", "严重度", "分流建议",
 def _is_table_row(line: str) -> bool:
     """Check if a line is a markdown table data row (not header separator)."""
     stripped = line.strip()
-    return bool(re.match(r'\|\s*\[\[cases/case-\d+\|', stripped))
+    return bool(re.match(r'\|\s*\[\[cases/(?:[\w-]+/)?case-\d+\|', stripped))
 
 
 def _parse_row_to_dict(line: str, headers: list[str]) -> dict:
@@ -234,6 +234,7 @@ def update_case_index(
     categories: list = None,
     source: str = "auto_ingest",
     narrative_thread: str = "",
+    platform_subdir: str = "",
 ) -> None:
     """Add new case to wiki/cases/index.md overview table + all dimension indexes.
 
@@ -258,7 +259,10 @@ def update_case_index(
     title = title.replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("|", "｜")[:40]
     tags = tags or []
     today = date.today().isoformat()
-    case_ref = f"[[cases/{case_id}|{case_num}]]"
+    if platform_subdir:
+        case_ref = f"[[cases/{platform_subdir}/{case_id}|{case_num}]]"
+    else:
+        case_ref = f"[[cases/{case_id}|{case_num}]]"
 
     with open(INDEX_PATH, "r", encoding="utf-8") as f:
         lines = f.readlines()

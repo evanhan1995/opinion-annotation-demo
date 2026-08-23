@@ -154,12 +154,15 @@ def ingest(raw: RawData, annotation: Annotation, notes: str = "",
             case_id = case_id or _generate_case_id()
         case_path = CASES_DIR / case_file if case_file else CASES_DIR / f"{case_id}.md"
     except Exception:
-        # Fallback to local case generation
+        # Fallback to local case generation（写平台子目录，与主路径落盘位置一致，
+        # 避免扁平目录 + 子目录双轨复用同一编号）
+        from engine.ingestor import _get_case_dir
         case_id = case_id or _generate_case_id()
         frontmatter = _build_case_frontmatter(raw, annotation, case_id,
                                               notes=notes, init_status=init_status)
         body = _build_case_body(raw, annotation, notes=notes, init_status=init_status)
-        case_path = CASES_DIR / f"{case_id}.md"
+        target_dir = _get_case_dir(raw.platform)
+        case_path = target_dir / f"{case_id}.md"
         case_path.write_text(frontmatter + "\n" + body, encoding="utf-8")
 
     # Append to log
@@ -225,15 +228,8 @@ def update_case_status(case_id: str, new_status: str, notes: str = "") -> dict:
     updated_text = f"---{fm_updated}---{parts[2]}"
     case_path.write_text(updated_text, encoding="utf-8")
 
-    # Try to update case index
-    try:
-        from engine.index_mgr import update_case_index
-        update_case_index(f"{case_id}.md", parts[2].split("severity:")[1].split("\n")[0].strip() if "severity:" in parts[2] else "P2",
-                          "已处理" if new_status == "已处理" else "内部研判",
-                          case_id, case_path.read_text(encoding="utf-8").split("title:")[0].strip() if "title:" in case_path.read_text(encoding="utf-8") else "",
-                          [], [], "")
-    except Exception:
-        pass
+    # 状态不写入 index.md（总览表无 status 列）。此前这里误调「新增行」的
+    # update_case_index 且参数错位，会在每次改状态时向索引追加脏行——已移除。
 
     # Log
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")

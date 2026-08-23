@@ -163,12 +163,13 @@ tags: [纠偏案例, {severity}]
     return filename
 
 
-def update_case_index(new_filename: str, human_correction: dict) -> None:
+def update_case_index(new_filename: str, human_correction: dict, platform: str = "") -> None:
     """更新 wiki/cases/index.md，添加新案例到总览表和维度索引。
 
     Delegates to engine.index_mgr (shared with ingestor).
     """
     from engine.index_mgr import update_case_index as do_update
+    from engine.ingestor import PLATFORM_SUBDIR
 
     severity = human_correction.get("严重度评级", "?")
     action = human_correction.get("分流建议", "?")
@@ -180,10 +181,11 @@ def update_case_index(new_filename: str, human_correction: dict) -> None:
         severity=severity,
         action=action,
         title=title,
-        platform="—",
+        platform=platform or "—",
         tags=["纠偏案例"],
         categories=categories,
         source="human_correction",
+        platform_subdir=PLATFORM_SUBDIR.get(platform, ""),
     )
 
 
@@ -316,7 +318,7 @@ def handle_correction(
     case_file = None
     if diff_level == "significant":
         case_file = generate_case(original_input, ai_output, human_correction, diff_level, diffs, url)
-        update_case_index(case_file, human_correction)
+        update_case_index(case_file, human_correction, (original_input or {}).get("来源平台", "未知"))
 
     # significant 与 minor 都落盘 correction json（统一数据源，方便统计脚本只读一处）。
     platform = (original_input or {}).get("来源平台", "未知")

@@ -22,6 +22,7 @@ from engine.index_mgr import (
     _split_table_cells,
     _rebuild_row,
     _upsert_dimension_row,
+    _is_table_row,
     update_case_index,
 )
 from engine.ingestor import _find_existing_case_by_url
@@ -223,6 +224,50 @@ class TestIndexUpdate:
         # (overview table may have it twice, which is a separate concern)
         severity_section = content.split("### 按严重度")[1].split("### 按分流建议")[0]
         assert severity_section.count("case-003") == 1
+
+    def test_subdir_link(self, temp_wiki):
+        """platform_subdir 非空时，链接应 subdir 感知（[[cases/<平台>/case-NNN]]）。"""
+        update_case_index(
+            new_filename="case-004.md",
+            severity="P2",
+            action="持续观察",
+            title="子目录案例",
+            platform="抖音",
+            tags=["质量"],
+            source="auto_ingest",
+            platform_subdir="douyin",
+        )
+        content = temp_wiki.read_text(encoding="utf-8")
+        assert "[[cases/douyin/case-004|004]]" in content
+
+    def test_subdir_link_appends_after_existing_subdir_row(self, temp_wiki):
+        """已有 subdir 行时，新行应追加其后（_is_table_row 需识别 subdir 链接）。"""
+        update_case_index(
+            new_filename="case-004.md",
+            severity="P2",
+            action="持续观察",
+            title="子目录案例A",
+            platform="抖音",
+            source="auto_ingest",
+            platform_subdir="douyin",
+        )
+        update_case_index(
+            new_filename="case-005.md",
+            severity="P3",
+            action="可忽略",
+            title="子目录案例B",
+            platform="微博",
+            source="auto_ingest",
+            platform_subdir="weibo",
+        )
+        content = temp_wiki.read_text(encoding="utf-8")
+        assert "[[cases/douyin/case-004|004]]" in content
+        assert "[[cases/weibo/case-005|005]]" in content
+
+    def test_is_table_row_matches_subdir_link(self):
+        assert _is_table_row("| [[cases/wechat/case-085|085]] | 标题 | P3 |")
+        assert _is_table_row("| [[cases/case-001|001]] | 标题 | P3 |")
+        assert not _is_table_row("| — | — | — | — |")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

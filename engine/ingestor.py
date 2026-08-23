@@ -676,6 +676,7 @@ def _update_case_index(new_filename: str, annotation_result: dict, scraped_data:
         categories=categories,
         source="auto_ingest",
         narrative_thread=narrative_thread,
+        platform_subdir=PLATFORM_SUBDIR.get(platform, ""),
     )
 
 
