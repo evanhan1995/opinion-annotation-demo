@@ -8,7 +8,6 @@
 5. 写入 wiki/log.md
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -19,6 +18,7 @@ from datetime import datetime, date
 from pathlib import Path
 
 from engine.index_mgr import _read_index_utf8, _ensure_utf8_encodable
+from engine.dedup import compute_content_hash
 
 _log = logging.getLogger("yuqing")
 
@@ -161,15 +161,16 @@ def ingest(
         # 微信：URL 签名轮换导致 URL 去重不可靠，未命中时用内容哈希兜底
         platform = scraped_data.get("来源平台", "未知")
         if platform in ("微信公众号", "wechat"):
-            _title = annotation_result.get("摘要", "") or ""
             _body = scraped_data.get("原文内容", "") or ""
-            content_hash = _compute_dedup_hash(_title, _body)
-            existing_hash = _find_existing_case_by_hash(content_hash)
-            if existing_hash:
-                _log.info("内容哈希命中但URL不同（疑似重复），跳过入库: %s | hash=%s",
-                          existing_hash, content_hash)
-                return {"action": "skipped", "skip_reason": "content_hash",
-                        "case_file": existing_hash, "boundary_check": {}}
+            # 抓取失败占位（无真实内容）不做内容哈希去重：失败记录同 body 会被误合并
+            if not _is_failure_placeholder(_body):
+                content_hash = _compute_dedup_hash(_body)
+                existing_hash = _find_existing_case_by_hash(content_hash)
+                if existing_hash:
+                    _log.info("内容哈希命中但URL不同（疑似重复），跳过入库: %s | hash=%s",
+                              existing_hash, content_hash)
+                    return {"action": "skipped", "skip_reason": "content_hash",
+                            "case_file": existing_hash, "boundary_check": {}}
 
     boundary = _check_boundaries(annotation_result)
     boundary_suggestions = _generate_boundary_suggestion(boundary, annotation_result, scraped_data)
@@ -278,17 +279,21 @@ def _extract_xhs_note_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
-def _normalize_text(s: str) -> str:
-    """规范化：去首尾空白、折叠内部空白、统一小写。"""
-    if not s:
-        return ""
-    return re.sub(r"\s+", " ", str(s).strip()).lower()
+def _compute_dedup_hash(body: str) -> str:
+    """微信内容哈希：sha256(规范化正文)[:16]。
+
+    只 hash 正文，不掺 LLM 摘要、也不掺标题——摘要非确定性、标题抓取可能波动，
+    掺进去会让同一篇文章两次哈希不一致。正文规范化（剥「标题：」前缀 + 动态 footer）
+    统一在 engine.dedup.compute_content_hash 里实现。
+    """
+    return compute_content_hash(body)
 
 
-def _compute_dedup_hash(title: str, body: str) -> str:
-    """微信内容哈希：sha256(规范化标题 + "\\n" + 规范化正文)[:16]。"""
-    norm = _normalize_text(title) + "\n" + _normalize_text(body)
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+def _is_failure_placeholder(body: str) -> bool:
+    """判断正文是否为微信抓取失败占位（无真实文章内容），此类不做内容哈希去重。"""
+    if not body:
+        return True
+    return "抓取失败" in body
 
 
 def _find_existing_case_by_url(url: str) -> str | None:
@@ -591,9 +596,9 @@ def _generate_auto_case(
     # 微信内容哈希：URL 签名轮换时的去重兜底，写入 frontmatter 供 _find_existing_case_by_hash 匹配
     dedup_hash_line = ""
     if platform in ("微信公众号", "wechat"):
-        _dtitle = annotation_result.get("摘要", "") or ""
         _dbody = scraped_data.get("原文内容", "") or ""
-        dedup_hash_line = f"dedup_hash: {_compute_dedup_hash(_dtitle, _dbody)}"
+        if not _is_failure_placeholder(_dbody):
+            dedup_hash_line = f"dedup_hash: {_compute_dedup_hash(_dbody)}"
     kw_line = f"source_keyword: {keyword}" if keyword else ""
     cats = annotation_result.get("舆情分类", [])
     cat_line = f"categories: [{', '.join(cats)}]" if cats else ""

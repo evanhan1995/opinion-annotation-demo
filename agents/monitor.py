@@ -24,11 +24,12 @@ import random
 import re
 import sys
 import time
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from engine.dedup import normalize_title, stable_dedup_key
 
 _log = logging.getLogger("yuqing")
 
@@ -888,27 +889,20 @@ def _search_with_timeout(searcher, keyword: str, sort_type: str, count: int,
 
 
 # ── Deduplication ──────────────────────────────────────────────────────
-_ZERO_WIDTH_CHARS = ["​", "‌", "‍", "﻿", "‎", "‏", " "]
-_TRAILING_DECOR = r"[\s#•●▲△▼▽■□★☆♦→←↑↓]+$"
-
-
+# 归一化/稳定键逻辑已收敛到 engine.dedup，此处保留薄包装供本模块内部调用。
 def _normalize_dedup_title(t: str) -> str:
-    """归一化微信标题：去零宽、全角→半角、折叠空白、剥尾随装饰符号。"""
-    if not t:
-        return ""
-    for z in _ZERO_WIDTH_CHARS:
-        t = t.replace(z, "")
-    t = unicodedata.normalize("NFKC", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    t = re.sub(_TRAILING_DECOR, "", t).strip()
-    return t
+    """归一化微信标题（委托 engine.dedup.normalize_title）。"""
+    return normalize_title(t)
 
 
 def _dedup_key(r) -> str:
-    """稳定去重键：微信 URL 是搜狗临时 token，用归一化 title+author；其余平台用 URL。"""
-    if getattr(r, "platform", "") == "wechat":
-        return f"{_normalize_dedup_title(r.title)}|{(r.author or '').strip()}"
-    return r.url
+    """稳定去重键（委托 engine.dedup.stable_dedup_key）。"""
+    return stable_dedup_key(
+        getattr(r, "platform", ""),
+        r.url,
+        getattr(r, "title", ""),
+        getattr(r, "author", ""),
+    )
 
 
 def _load_previous_keys(keyword_id: str, platform: str) -> set:

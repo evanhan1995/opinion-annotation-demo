@@ -380,7 +380,7 @@ url: https://www.xiaohongshu.com/explore/6a530650000000001702aa9e?xsec_token=OLD
         import engine.ingestor as ing
         title = "[快速通道] 欢迎大家来到 河南农业大学外国语学院"
         body = "正文内容"
-        h = ing._compute_dedup_hash(title, body)
+        h = ing._compute_dedup_hash(body)
         cases_dir = tmp_path / "cases"
         cases_dir.mkdir(parents=True)
         case_content = f"""---
@@ -426,7 +426,7 @@ url: https://www.douyin.com/video/7622512895737302310
         import engine.ingestor as ing
         title = "[快速通道] 欢迎大家来到 河南农业大学外国语学院"
         body = "正文内容"
-        h = ing._compute_dedup_hash(title, body)
+        h = ing._compute_dedup_hash(body)
         cases_dir = tmp_path / "cases"
         cases_dir.mkdir(parents=True)
         case_content = f"""---
@@ -451,6 +451,27 @@ dedup_hash: {h}
             assert result["case_file"] == "case-002.md"
         finally:
             ing.CASES_DIR = original
+
+    def test_compute_dedup_hash_body_only_ignores_title(self):
+        """内容哈希只 hash 正文：标题不同但正文相同 → 哈希一致（标题不掺入哈希）。"""
+        import engine.ingestor as ing
+        h1 = ing._compute_dedup_hash("标题：文章A\n\n正文内容")
+        h2 = ing._compute_dedup_hash("标题：文章B\n\n正文内容")
+        assert h1 == h2
+
+    def test_compute_dedup_hash_strips_dynamic_footer(self):
+        """动态 footer（X分钟前）不影响哈希：同一文章两次抓取 footer 不同 → 哈希一致。"""
+        import engine.ingestor as ing
+        h1 = ing._compute_dedup_hash("正文内容\n\n广东\n,\n16分钟前\n,")
+        h2 = ing._compute_dedup_hash("正文内容\n\n广东\n,\n18分钟前\n,")
+        assert h1 == h2
+
+    def test_is_failure_placeholder(self):
+        """抓取失败占位识别：失败正文 → True，正常正文 → False。"""
+        import engine.ingestor as ing
+        assert ing._is_failure_placeholder("(微信公众号抓取失败: 参数错误)") is True
+        assert ing._is_failure_placeholder("") is True
+        assert ing._is_failure_placeholder("正常正文内容") is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
