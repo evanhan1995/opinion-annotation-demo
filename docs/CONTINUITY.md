@@ -200,6 +200,7 @@ app.py 标注按钮点击
 4. ~~**`monitor_keywords.json` 反复被清空**~~ ✅ 已澄清：当前未提交 diff 是**关键词重配**（`字节避雷`→`豆包`，仅 wechat→4 平台，5→15 条，default→date），**非清空**。防误清空保护（3b1982a）仍保留，但本次非清空触发。
 5. **Sentinel 兜底分支不可达**：`engine/annotate.py::annotate_with_fallback` 的「全部 LLM 失败→Sentinel 规则预标注」分支（line 554-556）实际不可达——orchestrator 在 `fast_track` 时走 `annotate(use_llm=False)`（line 310-311，在 analyst 内早退，不进 fallback）；非 fast_track 时 `annotate()` 不传 `sentinel_result`（orchestrator line 313），故 fallback 内 `sentinel_result is None` 恒真，永远落到 `return {"error": True, ...}`（line 557）。需决定：在 line 313 补传 sentinel_result 让兜底生效，或删死分支。
 6. **scraper 平台映射表漂移**：三张独立映射表覆盖不一致——`engine/scraper.py::_detect_platform`（URL→中文，11 标签，含 X/Reddit/Instagram/TikTok/通用网页）、`agents/scraper.py::_PLATFORM_LABEL_TO_KEY`（中文→短键，12 项）、`engine/ingestor.py::PLATFORM_SUBDIR`（中文/短键→子目录，仅 6 平台）。`PLATFORM_SUBDIR` 缺 X/Reddit/Instagram/TikTok → 这些平台落扁平目录（`_get_case_dir` 返回 CASES_DIR），未来接入后可能重蹈 case_id 撞号。另 `_detect_platform` 的 instagram/tiktok 分支重复（line 135-138 vs 147-150，后者死代码）。
+7. **联网测试污染真实 wiki/cases/**：`test_orchestrator.py` 的 `run_active_monitor` 在全量 pytest 时会真实写入生产 `wiki/cases/` 目录，且 curator 兜底路径的 `get_next_case_id` 会复用低编号导致撞号覆盖真实 case。本次（2026-08-23）已发生一次真实数据覆盖事故（5 个真实 case 被覆盖），已用备份 `temp/cases_backup_20260823/` 完整恢复。**根因未修**：这些联网测试应该像 `test_case_id.py`/`test_core.py` 一样 monkeypatch 隔离 `CASES_DIR` 等路径，而不是直接操作真实目录。**优先级：高**（已有真实事故记录，不是理论风险）。
 
 ### 新注意事项（追加到上文旧注意事项）
 - **微信公众号链接 = 搜狗临时跳转凭据**：会话外/过期后不可打开（sn 签名不暴露，缺 sn 即「参数错误」）。存库的公众号 url 无法作为长期可访问入口——展示层需弱化（tab4 已做，见待办 1），不要试图「修复」链接本身（微信反爬硬约束，见旧注意事项 10）。
