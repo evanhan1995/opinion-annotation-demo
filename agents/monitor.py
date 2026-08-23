@@ -24,6 +24,7 @@ import random
 import re
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -887,12 +888,35 @@ def _search_with_timeout(searcher, keyword: str, sort_type: str, count: int,
 
 
 # ── Deduplication ──────────────────────────────────────────────────────
-def _load_previous_urls(keyword_id: str, platform: str) -> set:
-    """Load ALL previously archived URLs across all dates for cross-day dedup."""
+_ZERO_WIDTH_CHARS = ["​", "‌", "‍", "﻿", "‎", "‏", " "]
+_TRAILING_DECOR = r"[\s#•●▲△▼▽■□★☆♦→←↑↓]+$"
+
+
+def _normalize_dedup_title(t: str) -> str:
+    """归一化微信标题：去零宽、全角→半角、折叠空白、剥尾随装饰符号。"""
+    if not t:
+        return ""
+    for z in _ZERO_WIDTH_CHARS:
+        t = t.replace(z, "")
+    t = unicodedata.normalize("NFKC", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(_TRAILING_DECOR, "", t).strip()
+    return t
+
+
+def _dedup_key(r) -> str:
+    """稳定去重键：微信 URL 是搜狗临时 token，用归一化 title+author；其余平台用 URL。"""
+    if getattr(r, "platform", "") == "wechat":
+        return f"{_normalize_dedup_title(r.title)}|{(r.author or '').strip()}"
+    return r.url
+
+
+def _load_previous_keys(keyword_id: str, platform: str) -> set:
+    """Load ALL previously archived dedup keys across all dates for cross-day dedup."""
     archive_root = RAW_DIR / "monitor"
     if not archive_root.exists():
         return set()
-    urls = set()
+    keys = set()
     for date_dir in archive_root.iterdir():
         if not date_dir.is_dir():
             continue
@@ -900,11 +924,18 @@ def _load_previous_urls(keyword_id: str, platform: str) -> set:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 for item in data:
-                    if isinstance(item, dict) and "url" in item:
-                        urls.add(item["url"])
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("dedup_key"):
+                        keys.add(item["dedup_key"])
+                    elif platform == "wechat" and item.get("title"):
+                        # 旧归档无 dedup_key，现场用 title+author 计算，与新格式一致
+                        keys.add(f"{_normalize_dedup_title(item['title'])}|{(item.get('author') or '').strip()}")
+                    elif item.get("url"):
+                        keys.add(item["url"])
             except Exception as e:
                 _log.debug("读取历史归档去重数据失败: %s", e)
-    return urls
+    return keys
 
 
 def _archive_results(results: list[SearchResult], date_str: str, keyword_id: str, platform: str, sort_type: str):
@@ -913,7 +944,8 @@ def _archive_results(results: list[SearchResult], date_str: str, keyword_id: str
     archive_dir.mkdir(parents=True, exist_ok=True)
     path = archive_dir / f"{keyword_id}_{platform}_{sort_type}.json"
     data = [{"title": r.title, "url": r.url, "author": r.author,
-             "publish_time": r.publish_time, "engagement": r.engagement} for r in results]
+             "publish_time": r.publish_time, "engagement": r.engagement,
+             "dedup_key": _dedup_key(r)} for r in results]
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -1115,10 +1147,10 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
             else:
                 kr.hot_results = results
 
-            prev_urls = _load_previous_urls(kw_id, platform)
+            prev_keys = _load_previous_keys(kw_id, platform)
             # 过滤掉失败项（url 为空或 error 非空），避免把「抓取失败」当新内容抓取；
             # 失败项仍保留在 hot_results/date_results 中供 UI 展示为错误。
-            kr.new_items = [r for r in results if r.url and not r.error and r.url not in prev_urls]
+            kr.new_items = [r for r in results if r.url and not r.error and _dedup_key(r) not in prev_keys]
 
             harvest.total_fetched += len(results)
             harvest.total_new += len(kr.new_items)
