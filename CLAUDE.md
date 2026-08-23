@@ -71,6 +71,7 @@ Windows 11 + Python 3.14
 - 代码修改后必须 `python -m pytest tests/ -x -q`
 - 测试失败修代码，不修测试（除非测试预期本身错误）
 - 1 个预存失败: `test_sentiment_ml.py::TestModelTraining`（与业务逻辑无关）
+- **测试后清理（用户要求）**：全局 `pytest`（尤其 orchestrator/monitor 联网用例）会触发真实搜索/入库，污染真实知识库。跑完必须清理测试痕迹：删运行时残留（`config/model_degradation.json`、`config/scraper_degradation.json`、`outputs/monitor_*.xlsx`、`outputs/monitor_stats_*.json`），恢复被测试改写的 `wiki/index.md`/`wiki/embeddings/case_embeddings.json`/`wiki/taxonomy/candidate_tags.json`，删测试新建的 `wiki/cases/` 文件。⚠️ `raw/`、`outputs/keyword_feedback.jsonl` 是历史真实数据（5-6 月），勿整目录删除。
 
 ## 文件地图
 
