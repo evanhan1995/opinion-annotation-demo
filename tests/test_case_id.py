@@ -58,6 +58,7 @@ def test_pipeline_action_plan_matches_case_file(tmp_path, monkeypatch):
     避免 triage 自行生成导致 ActionPlan.case_id 与入库文件 id 不一致。
     """
     import engine.index_mgr as idxmgr
+    import engine.embeddings as embeddings_mod
     import agents.scraper as scraper_mod
     import agents.analyst as analyst_mod
     import agents.sentinel as sentinel_mod
@@ -80,6 +81,8 @@ def test_pipeline_action_plan_matches_case_file(tmp_path, monkeypatch):
     monkeypatch.setattr(curator_mod, "LOG_PATH", tmp_path / "curator_log.md")
     (tmp_path / "global_index.md").write_text("", encoding="utf-8")
     monkeypatch.setattr(idxmgr, "update_case_index", lambda **kw: None)
+    # 隔离 embeddings 写入路径，避免测试向量污染真实 wiki/embeddings/case_embeddings.json
+    monkeypatch.setattr(embeddings_mod, "EMBEDDINGS_FILE", tmp_path / "embeddings.json")
 
     # Mock scraper / analyst / sentinel，避免真实联网与 LLM 调用
     raw = RawData(url="https://example.com/fresh", platform="weibo",
