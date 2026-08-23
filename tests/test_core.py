@@ -576,3 +576,39 @@ class TestJsonUtils:
         from agents.shared import extract_json
         result = extract_json('```json\n[4, 5]\n```')
         assert result == [4, 5]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 5: 索引读写编码校验
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestIndexUtf8Guard:
+    """Verify index read/write encoding guards."""
+
+    def test_read_index_utf8_rejects_real_bad_line(self, tmp_path):
+        """真实坏行（含续字节 0x9a、格式残缺）应抛含位置+坏字节的明确错误。"""
+        from engine.index_mgr import _read_index_utf8
+        bad = tmp_path / "index.md"
+        # 前一行是合法 case-096，后一行是含真实坏字节 0x9a 0x84 的残缺行
+        bad.write_bytes(
+            b"---\ntitle: t\n---\n\n"
+            b"| [[cases/case-096|096-ok]] | ok | P3 | \xe5\x86\x85\xe9\x83\xa8 | 2026-08-22 |\n"
+            b"| [[cases/ca\x9a\x84\xe6\x8e\xa5 | P3 | \xe5\x86\x85\xe9\x83\xa8\xe7\xa0\x94\xe5\x88\xa4 | 2026-08-22 |\n"
+        )
+        with pytest.raises(ValueError) as exc:
+            _read_index_utf8(bad)
+        msg = str(exc.value)
+        assert "编码损坏" in msg
+        assert "0x9a" in msg  # 坏字节被明确指出
+
+    def test_ensure_utf8_encodable_rejects_surrogate(self):
+        """含孤立代理字符的字符串应被拒绝，抛明确错误。"""
+        from engine.index_mgr import _ensure_utf8_encodable
+        with pytest.raises(ValueError) as exc:
+            _ensure_utf8_encodable("bad\ud800", context="test")
+        assert "无法 UTF-8 编码" in str(exc.value)
+
+    def test_ensure_utf8_encodable_accepts_clean(self):
+        """合法内容应通过校验。"""
+        from engine.index_mgr import _ensure_utf8_encodable
+        _ensure_utf8_encodable("正常中文 | P3 | 内部研判", context="test")

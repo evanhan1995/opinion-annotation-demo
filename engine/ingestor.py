@@ -18,6 +18,8 @@ import time
 from datetime import datetime, date
 from pathlib import Path
 
+from engine.index_mgr import _read_index_utf8, _ensure_utf8_encodable
+
 _log = logging.getLogger("yuqing")
 
 ENGINE_DIR = Path(__file__).resolve().parent
@@ -441,7 +443,7 @@ def _check_boundaries(annotation_result: dict) -> dict:
         result["unusual_combo"] = True
 
     if INDEX_PATH.exists():
-        content = INDEX_PATH.read_text(encoding="utf-8")
+        content = _read_index_utf8(INDEX_PATH)
         if f"| {platform} |" not in content:
             result["new_platform"] = True
 
@@ -772,8 +774,7 @@ def _update_global_index(new_filename: str, annotation_result: dict) -> None:
 
     new_row = f"| [[cases/{case_id}|{case_num}-{title[:30]}]] | {title[:40]} | {severity} | {action} | {today} |"
 
-    with open(GLOBAL_INDEX_PATH, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    lines = _read_index_utf8(GLOBAL_INDEX_PATH).splitlines()
 
     # Find last case table row
     last_case_line_idx = -1
@@ -793,8 +794,10 @@ def _update_global_index(new_filename: str, annotation_result: dict) -> None:
         table_sep = "|------|------|--------|----------|----------|"
         new_lines.extend(["", "## 案例列表", "", table_header, table_sep, new_row])
 
+    final_content = "\n".join(new_lines)
+    _ensure_utf8_encodable(final_content, context=f"_update_global_index({new_filename})")
     with open(GLOBAL_INDEX_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(new_lines))
+        f.write(final_content)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

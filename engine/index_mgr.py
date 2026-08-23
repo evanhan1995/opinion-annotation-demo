@@ -25,6 +25,25 @@ PROJECT_DIR = ENGINE_DIR.parent
 INDEX_PATH = PROJECT_DIR / "wiki" / "cases" / "index.md"
 
 
+def _read_index_utf8(path: Path) -> str:
+    """读索引文件，非法 UTF-8 时抛含文件路径+字节位置+坏字节的明确错误。"""
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            f"索引文件编码损坏: {path} 第 {e.start} 字节处非法 UTF-8（{data[e.start]:#x}）"
+        ) from e
+
+
+def _ensure_utf8_encodable(text: str, context: str = "") -> None:
+    """写索引前校验内容可无损 UTF-8 编码；失败抛明确错误（含哪条数据/字段）。"""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise ValueError(f"{context}: 内容含无法 UTF-8 编码的字符: {e}") from e
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Table cell helpers (protect [[...]] during split)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -264,8 +283,7 @@ def update_case_index(
     else:
         case_ref = f"[[cases/{case_id}|{case_num}]]"
 
-    with open(INDEX_PATH, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    lines = _read_index_utf8(INDEX_PATH).splitlines()
 
     # --- Overview table: structured dict→row construction ---
     if source == "human_correction":
@@ -347,5 +365,7 @@ def update_case_index(
             if n_l1:
                 new_lines[i] = _upsert_dimension_row(line, n_l1, case_ref)
 
+    final_content = "\n".join(new_lines)
+    _ensure_utf8_encodable(final_content, context="update_case_index")
     with open(INDEX_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(new_lines))
+        f.write(final_content)
