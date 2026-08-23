@@ -352,6 +352,106 @@ type: case
         finally:
             ing.CASES_DIR = original
 
+    def test_xhs_url_normalization_dedup(self, monkeypatch, tmp_path):
+        """小红书不同 xsec_token 同笔记 ID 应判重（URL 规范化）。"""
+        cases_dir = tmp_path / "cases"
+        cases_dir.mkdir(parents=True)
+        case_content = """---
+title: 小红书案例
+type: case
+url: https://www.xiaohongshu.com/explore/6a530650000000001702aa9e?xsec_token=OLD&xsec_source=pc_search
+---
+正文
+"""
+        (cases_dir / "case-001.md").write_text(case_content, encoding="utf-8")
+        import engine.ingestor as ing
+        original = ing.CASES_DIR
+        ing.CASES_DIR = cases_dir
+        try:
+            result = ing._find_existing_case_by_url(
+                "https://www.xiaohongshu.com/explore/6a530650000000001702aa9e?xsec_token=NEW_DIFFERENT&xsec_source=pc_search"
+            )
+            assert result == "case-001.md"
+        finally:
+            ing.CASES_DIR = original
+
+    def test_wechat_content_hash_dedup(self, monkeypatch, tmp_path):
+        """微信同文章不同 URL 应通过 dedup_hash 判重。"""
+        import engine.ingestor as ing
+        title = "[快速通道] 欢迎大家来到 河南农业大学外国语学院"
+        body = "正文内容"
+        h = ing._compute_dedup_hash(title, body)
+        cases_dir = tmp_path / "cases"
+        cases_dir.mkdir(parents=True)
+        case_content = f"""---
+title: 微信案例
+type: case
+url: https://mp.weixin.qq.com/s?signature=OLD
+dedup_hash: {h}
+---
+正文
+"""
+        (cases_dir / "case-002.md").write_text(case_content, encoding="utf-8")
+        original = ing.CASES_DIR
+        ing.CASES_DIR = cases_dir
+        try:
+            result = ing._find_existing_case_by_hash(h)
+            assert result == "case-002.md"
+        finally:
+            ing.CASES_DIR = original
+
+    def test_other_platform_url_dedup_unchanged(self, monkeypatch, tmp_path):
+        """抖音（稳定视频 ID）URL 去重行为不变。"""
+        cases_dir = tmp_path / "cases"
+        cases_dir.mkdir(parents=True)
+        case_content = """---
+title: 抖音案例
+type: case
+url: https://www.douyin.com/video/7622512895737302310
+---
+正文
+"""
+        (cases_dir / "case-003.md").write_text(case_content, encoding="utf-8")
+        import engine.ingestor as ing
+        original = ing.CASES_DIR
+        ing.CASES_DIR = cases_dir
+        try:
+            result = ing._find_existing_case_by_url("https://www.douyin.com/video/7622512895737302310")
+            assert result == "case-003.md"
+        finally:
+            ing.CASES_DIR = original
+
+    def test_ingest_wechat_skip_reason_content_hash(self, monkeypatch, tmp_path):
+        """微信同文章不同 URL 走完整 ingest 流程应返回 skip_reason=content_hash。"""
+        import engine.ingestor as ing
+        title = "[快速通道] 欢迎大家来到 河南农业大学外国语学院"
+        body = "正文内容"
+        h = ing._compute_dedup_hash(title, body)
+        cases_dir = tmp_path / "cases"
+        cases_dir.mkdir(parents=True)
+        case_content = f"""---
+title: 微信案例
+type: case
+url: https://mp.weixin.qq.com/s?signature=OLD
+dedup_hash: {h}
+---
+正文
+"""
+        (cases_dir / "case-002.md").write_text(case_content, encoding="utf-8")
+        original = ing.CASES_DIR
+        ing.CASES_DIR = cases_dir
+        try:
+            scraped = {"来源平台": "微信公众号", "原文内容": body,
+                       "原文链接": "https://mp.weixin.qq.com/s?signature=NEW"}
+            annotation = {"摘要": title}
+            result = ing.ingest(scraped, annotation,
+                                url="https://mp.weixin.qq.com/s?signature=NEW")
+            assert result["action"] == "skipped"
+            assert result["skip_reason"] == "content_hash"
+            assert result["case_file"] == "case-002.md"
+        finally:
+            ing.CASES_DIR = original
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 3: correction diff level

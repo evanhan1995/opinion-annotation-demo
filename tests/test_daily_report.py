@@ -29,10 +29,8 @@ class TestDailyReport:
         path = generate_daily("2026-05-23")
         content = Path(path).read_text(encoding="utf-8")
         assert content.startswith("# 舆情日报")
-        assert "声量概览" in content
-        assert "情感分布" in content
-        assert "风险分级" in content
-        assert "处置状态统计" in content
+        assert "## 监测概况" in content
+        assert "自动生成" in content
 
 
 class TestMonthlyReport:

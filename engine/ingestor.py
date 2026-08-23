@@ -8,6 +8,7 @@
 5. 写入 wiki/log.md
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -152,7 +153,21 @@ def ingest(
     if url:
         existing = _find_existing_case_by_url(url)
         if existing:
-            return {"action": "skipped", "case_file": existing, "boundary_check": {}}
+            _log.info("URL去重命中，跳过入库: %s", existing)
+            return {"action": "skipped", "skip_reason": "url_match",
+                    "case_file": existing, "boundary_check": {}}
+        # 微信：URL 签名轮换导致 URL 去重不可靠，未命中时用内容哈希兜底
+        platform = scraped_data.get("来源平台", "未知")
+        if platform in ("微信公众号", "wechat"):
+            _title = annotation_result.get("摘要", "") or ""
+            _body = scraped_data.get("原文内容", "") or ""
+            content_hash = _compute_dedup_hash(_title, _body)
+            existing_hash = _find_existing_case_by_hash(content_hash)
+            if existing_hash:
+                _log.info("内容哈希命中但URL不同（疑似重复），跳过入库: %s | hash=%s",
+                          existing_hash, content_hash)
+                return {"action": "skipped", "skip_reason": "content_hash",
+                        "case_file": existing_hash, "boundary_check": {}}
 
     boundary = _check_boundaries(annotation_result)
     boundary_suggestions = _generate_boundary_suggestion(boundary, annotation_result, scraped_data)
@@ -241,28 +256,77 @@ def _archive_raw_file(url: str) -> None:
         except Exception:
             continue
 
-def _find_existing_case_by_url(url: str) -> str | None:
-    """Scan case frontmatter for matching URL. Returns filename or None.
-
-    Only reads the YAML frontmatter block (between --- delimiters) of each
-    case file, not the full file body.  O(N) in number of cases, constant per file.
-    Searches flat + platform subdirectories.
-    """
-    if not url or not CASES_DIR.exists():
-        return None
-    all_files = list(CASES_DIR.glob("case-*.md"))
-    for sub in CASES_DIR.iterdir():
+def _iter_case_files():
+    """迭代所有 case 文件（扁平 + 平台子目录）。"""
+    if not CASES_DIR.exists():
+        return
+    for f in sorted(CASES_DIR.glob("case-*.md")):
+        yield f
+    for sub in sorted(CASES_DIR.iterdir()):
         if sub.is_dir():
-            all_files.extend(sub.glob("case-*.md"))
-    for f in sorted(all_files):
+            for f in sorted(sub.glob("case-*.md")):
+                yield f
+
+
+def _extract_xhs_note_id(url: str) -> str:
+    """从小红书 URL 提取稳定笔记 ID（explore/<ID>）。非小红书返回空串。"""
+    if not url:
+        return ""
+    m = re.search(r'(?:xiaohongshu\.com|rednote\.com)/explore/([A-Za-z0-9]+)', url)
+    return m.group(1) if m else ""
+
+
+def _normalize_text(s: str) -> str:
+    """规范化：去首尾空白、折叠内部空白、统一小写。"""
+    if not s:
+        return ""
+    return re.sub(r"\s+", " ", str(s).strip()).lower()
+
+
+def _compute_dedup_hash(title: str, body: str) -> str:
+    """微信内容哈希：sha256(规范化标题 + "\\n" + 规范化正文)[:16]。"""
+    norm = _normalize_text(title) + "\n" + _normalize_text(body)
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+
+
+def _find_existing_case_by_url(url: str) -> str | None:
+    """按 URL 去重。小红书按稳定笔记 ID（忽略轮换的 xsec_token），其余平台 URL 子串匹配。"""
+    if not url:
+        return None
+    note_id = _extract_xhs_note_id(url)
+    for f in _iter_case_files():
         text = f.read_text(encoding="utf-8")
         parts = text.split("---", 2)
-        if len(parts) >= 3:
-            fm = parts[1]
-            for line in fm.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("url:") and url in stripped:
+        if len(parts) < 3:
+            continue
+        fm = parts[1]
+        for line in fm.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("url:"):
+                continue
+            stored = stripped[len("url:"):].strip()
+            if note_id:
+                if _extract_xhs_note_id(stored) == note_id:
                     return f.name
+            elif url in stored:
+                return f.name
+    return None
+
+
+def _find_existing_case_by_hash(content_hash: str) -> str | None:
+    """按 frontmatter 的 dedup_hash 字段去重（微信内容哈希兜底）。返回文件名或 None。"""
+    if not content_hash:
+        return None
+    for f in _iter_case_files():
+        text = f.read_text(encoding="utf-8")
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            continue
+        fm = parts[1]
+        for line in fm.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("dedup_hash:") and content_hash in stripped:
+                return f.name
     return None
 
 
@@ -522,6 +586,12 @@ def _generate_auto_case(
         boundary_lines.append("- 此案例落在现有规则覆盖范围内，无明显边界异常。")
 
     url_line = f"url: {url}" if url else ""
+    # 微信内容哈希：URL 签名轮换时的去重兜底，写入 frontmatter 供 _find_existing_case_by_hash 匹配
+    dedup_hash_line = ""
+    if platform in ("微信公众号", "wechat"):
+        _dtitle = annotation_result.get("摘要", "") or ""
+        _dbody = scraped_data.get("原文内容", "") or ""
+        dedup_hash_line = f"dedup_hash: {_compute_dedup_hash(_dtitle, _dbody)}"
     kw_line = f"source_keyword: {keyword}" if keyword else ""
     cats = annotation_result.get("舆情分类", [])
     cat_line = f"categories: [{', '.join(cats)}]" if cats else ""
@@ -560,6 +630,7 @@ platform: {platform}
 source: auto_ingest
 status: {init_status}
 {url_line}
+{dedup_hash_line}
 {kw_line}
 {cat_line}
 {author_line}

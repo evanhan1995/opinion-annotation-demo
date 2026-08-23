@@ -83,6 +83,11 @@ def _build_case_frontmatter(raw: RawData, annotation: Annotation, case_id: str,
     ]
     if notes:
         lines.append(f"notes: {notes}")
+    # 微信内容哈希：URL 签名轮换时的去重兜底
+    if raw.platform in ("微信公众号", "wechat"):
+        from engine.ingestor import _compute_dedup_hash
+        _dh = _compute_dedup_hash(raw.title or "", raw.content or "")
+        lines.append(f"dedup_hash: {_dh}")
     lines.append("---")
     return "\n".join(lines)
 

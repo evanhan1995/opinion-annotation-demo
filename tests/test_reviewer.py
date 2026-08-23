@@ -152,6 +152,8 @@ class TestGenerateAutoCaseReviewFrontmatter:
         cases = tmp_path / "cases"
         cases.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(ingestor_mod, "CASES_DIR", cases)
+        # 隔离 INDEX_PATH：_check_boundaries 会读它，须避免依赖真实（可能被联网测试污染的）wiki/cases/index.md
+        monkeypatch.setattr(ingestor_mod, "INDEX_PATH", cases / "index.md")
         scraped_data = {
             "原文内容": "测试", "来源平台": "微博", "发布者类型": "t",
             "互动数据": "", "发布时间": "2026-08-23", "原文链接": "https://x.com/1",
