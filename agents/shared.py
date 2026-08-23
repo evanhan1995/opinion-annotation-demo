@@ -160,6 +160,11 @@ class Annotation:
     # 降级标记：LLM 调用/解析失败降级（Sentinel 预标注 / 兜底 mock）时置 True
     degraded: bool = False
     degraded_reason: str = ""
+    # 复核标记：P0/P1 双 Agent 复核结果（仅 P0/P1 案例非空，P2/P3 保持默认）
+    review_severity: str = ""       # 复核 severity（空=未复核/复核失败）
+    review_disputed: bool = False   # 复核分歧 = "复核存疑"
+    review_reason: str = ""         # 复核理由 / 失败原因
+    sentinel_reference: str = ""    # Sentinel 规则参考
 
     def __post_init__(self):
         if self.secondary_threads is None:
@@ -221,6 +226,16 @@ class ForumResult:
     contradictions: list[str] = field(default_factory=list)  # discrepancy descriptions
     host_verdict: str = ""  # Forum Host LLM summary
     needs_review: bool = False  # flag for manual review
+
+
+@dataclass
+class SeverityReviewResult:
+    """Reviewer Agent 复核结果（P0/P1 双 Agent 复核）。"""
+    initial_severity: str
+    review_severity: str = ""       # 复核 severity；"" 表示复核失败/不可用
+    sentinel_reference: str = ""    # Sentinel 规则参考："P0"/"P1"/"P2"/"P3"/"无命中"
+    is_consistent: bool = False     # 初判与复核是否一致
+    review_reason: str = ""         # 复核理由 / 失败原因
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -339,4 +354,9 @@ def annotation_to_engine_dict(ann: Annotation) -> dict:
     if ann.degraded:
         result["degraded"] = True
         result["degraded_reason"] = ann.degraded_reason
+    # 复核标记：仅 review_severity 非空时写入（P2/P3 未复核，不写，保持 frontmatter 干净）
+    if ann.review_severity:
+        result["review_severity"] = ann.review_severity
+        result["review_disputed"] = ann.review_disputed
+        result["sentinel_reference"] = ann.sentinel_reference
     return result

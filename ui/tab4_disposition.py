@@ -121,8 +121,10 @@ def render_tab4():
         assigned_info = f" | 指派: {case.get('assigned_date', '无')}" if case.get("assigned_date") else ""
         # 降级标注：LLM 失败降级入库的案例加可见标记
         _deg_mark = "⚠️ [降级标注] " if str(case.get("degraded", "")).lower() == "true" else ""
+        # 复核存疑标注：P0/P1 双 Agent 复核分歧的案例加可见标记
+        _review_mark = "⚠️ [复核存疑] " if str(case.get("review_disputed", "")).lower() == "true" else ""
         with st.expander(
-            f"[{case['severity']}] {_deg_mark}{case['title'][:50]} — {case['status']} ({case['platform']}){assigned_info}",
+            f"[{case['severity']}] {_deg_mark}{_review_mark}{case['title'][:50]} — {case['status']} ({case['platform']}){assigned_info}",
             expanded=case["severity"] in ("P0", "P1"),
         ):
             st.markdown(

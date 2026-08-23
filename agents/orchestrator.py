@@ -59,19 +59,26 @@ def _dispatch_emergency(annotation: Annotation, notify_feishu: bool = True) -> b
     severity = annotation.severity
     title = annotation.summary[:60] if annotation.summary else "无标题"
     tags_str = ", ".join(annotation.risk_tags) if annotation.risk_tags else "无"
+
+    # 复核存疑措辞（P0/P1 双 Agent 复核分歧/失败时非空）
+    from agents.reviewer import review_dispute_text
+    dispute_text = review_dispute_text(annotation)
+    disputed_mark = "【复核存疑】" if dispute_text else ""
+
     # Escape single quotes for PowerShell: ' → ''
-    msg_short = f"[{severity}] {title}".replace("'", "''")
+    msg_short = f"[{severity}] {title}{disputed_mark}".replace("'", "''")
 
     # Desktop alert
     if sys.platform == "win32":
         try:
             import subprocess
+            dispute_line = (f"\\n\\n复核：{dispute_text}".replace("'", "''")) if dispute_text else ""
             ps_script = (
                 f'Add-Type -AssemblyName System.Windows.Forms;'
                 f'Add-Type -AssemblyName System.Media;'
                 f'[System.Media.SystemSounds]::Hand.Play();'
                 f'[System.Windows.Forms.MessageBox]::Show('
-                f'\'{msg_short}\\n\\n平台: {annotation.platform}\\n风险: {tags_str}\\n\\n{annotation.url}\','
+                f'\'{msg_short}{dispute_line}\\n\\n平台: {annotation.platform}\\n风险: {tags_str}\\n\\n{annotation.url}\','
                 f'\'舆情{severity}告警\','
                 f'[System.Windows.Forms.MessageBoxButtons]::OK,'
                 f'[System.Windows.Forms.MessageBoxIcon]::Warning)'
@@ -90,14 +97,16 @@ def _dispatch_emergency(annotation: Annotation, notify_feishu: bool = True) -> b
             from shared.notify import send_severity_card
             title = annotation.summary[:100] if annotation.summary else "无标题"
             tags_str = ", ".join(annotation.risk_tags) if annotation.risk_tags else "无"
+            review_line = f"\n⚠️ 复核存疑：{dispute_text}" if dispute_text else ""
             body = (
-                f"**{title}**\n\n"
+                f"**{title}**{disputed_mark}\n\n"
                 f"平台: {annotation.platform} | 风险: {tags_str}\n"
-                f"分流建议: {annotation.triage}\n"
+                f"分流建议: {annotation.triage}"
+                f"{review_line}\n"
                 f"[查看原文]({annotation.url})"
             )
             sent = send_severity_card(
-                title=f"舆情{annotation.severity}告警",
+                title=f"舆情{annotation.severity}告警{disputed_mark}",
                 body_text=body,
                 severity=annotation.severity,
             )
@@ -308,6 +317,15 @@ def run_passive_analysis(url: str, pipeline_notes: str = "",
             finished_at=datetime.now().isoformat(), success=False,
             errors=[f"[{raw.platform}] Analyst error for {url}: {e}"],
         )
+
+    # P0/P1 双 Agent 复核（第二独立判断，在熔断告警之前）
+    if annotation.severity in ("P0", "P1"):
+        from agents.reviewer import review_severity
+        review = review_severity(raw, annotation)
+        annotation.review_severity = review.review_severity
+        annotation.review_reason = review.review_reason
+        annotation.sentinel_reference = review.sentinel_reference
+        annotation.review_disputed = bool(review.review_severity) and not review.is_consistent
 
     # P0/P1 meltdown
     emergency = False

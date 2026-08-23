@@ -539,6 +539,16 @@ def _generate_auto_case(
     _deg = annotation_result.get("degraded", False)
     deg_line = (f"degraded: true\ndegraded_reason: {annotation_result.get('degraded_reason', '')}"
                 if _deg else "")
+    # 复核标记：仅 P0/P1 复核过（review_severity 非空）时写 frontmatter，P2/P3 不写
+    _rv_sev = annotation_result.get("review_severity", "")
+    review_lines = ""
+    if _rv_sev:
+        _rv_disputed = str(annotation_result.get("review_disputed", "")).lower() == "true"
+        review_lines = (
+            f"review_severity: {_rv_sev}\n"
+            f"review_disputed: {'true' if _rv_disputed else 'false'}\n"
+            f"sentinel_reference: {annotation_result.get('sentinel_reference', '')}"
+        )
 
     content = f"""---
 title: 案例{case_id.split('-')[1]}: {title_text}
@@ -560,6 +570,7 @@ status: {init_status}
 {rtx_line}
 {tt_line}
 {deg_line}
+{review_lines}
 notes: {notes}
 tags: [auto_ingest, {severity}]
 ---

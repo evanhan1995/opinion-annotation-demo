@@ -274,6 +274,7 @@ def _parse_case_frontmatter(filepath: Path) -> dict:
         "ingested_at": "", "assigned_date": "", "notes": "", "author": "",
         "narrative_thread": "", "secondary_threads": "", "target_type": "",
         "degraded": "", "degraded_reason": "",
+        "review_disputed": "",
     }
     try:
         text = filepath.read_text(encoding="utf-8")
