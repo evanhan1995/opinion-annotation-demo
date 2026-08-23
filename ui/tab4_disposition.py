@@ -132,7 +132,12 @@ def render_tab4():
                 f"**当前状态**: {case['status']}"
             )
             if case.get("url"):
-                st.caption(case["url"][:100])
+                if case.get("platform") == "微信公众号":
+                    # 微信链接为搜狗临时跳转凭据，会话外/过期后不可打开（sn 签名不暴露），
+                    # 弱化为提示文字，避免用户误点「参数错误」。
+                    st.caption("🔗 微信临时链接（会话外不可打开，原文需 Monitor 会话内抓取）")
+                else:
+                    st.caption(case["url"][:100])
             if case.get("assigned_date"):
                 st.caption(f"📅 被指派日期: {case['assigned_date']}")
 
