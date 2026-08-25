@@ -543,7 +543,7 @@ def render_tab3():
             pf = kr.platform
             if pf not in platform_status:
                 platform_status[pf] = {"fetched": 0, "new": 0, "errors": []}
-            platform_status[pf]["fetched"] += len(kr.date_results) + len(kr.hot_results)
+            platform_status[pf]["fetched"] += kr.candidates_fetched
             platform_status[pf]["new"] += len(kr.new_items)
             for r in kr.date_results + kr.hot_results:
                 if r.error:

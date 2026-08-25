@@ -53,6 +53,11 @@ _DATE_CLIENTSIDE_PLATFORMS = {"youtube", "weibo"}
 # Platforms skipped in date mode (no date filter, no practical workaround).
 _DATE_SKIP_PLATFORMS = {"xiaohongshu", "wechat"}
 
+# 4a overfetch: 先多抓、后去重，避免「已见内容」挤占「新增」名额（Bug 2 修复）。
+# 廉价平台抓 count×2 条候选；wechat 本轮不翻倍（反爬约束 + 微信单条解析慢）。
+_OVERFETCH_MULT = 2
+_OVERFETCH_SKIP_PLATFORMS = {"wechat"}
+
 if sys.stdout and hasattr(sys.stdout, "buffer"):
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -87,6 +92,7 @@ class KeywordResult:
     date_results: list[SearchResult] = field(default_factory=list)
     hot_results: list[SearchResult] = field(default_factory=list)
     new_items: list[SearchResult] = field(default_factory=list)  # after dedup
+    candidates_fetched: int = 0  # raw pull count (incl. overfetch)
     notes: list[str] = field(default_factory=list)  # platform-specific notes (date mode)
 
 
@@ -98,6 +104,7 @@ class MonitorStats:
     total_fetched: int = 0
     total_new: int = 0
     dedup_rate: float = 0.0
+    candidates_fetched: int = 0
     hit_rates: dict = field(default_factory=dict)   # {kw_id: {platform: rate}}
 
 
@@ -111,6 +118,7 @@ class MonitorHarvest:
     total_fetched: int = 0
     total_new: int = 0
     dedup_rate: float = 0.0
+    candidates_fetched: int = 0
     excel_path: str = ""
     stats: Optional[MonitorStats] = None
     errors: list[str] = field(default_factory=list)
@@ -1159,9 +1167,14 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
                 search_date_from = ""
                 search_date_to = ""
 
+            # ── 4a overfetch: 先多抓（count×mult）、后去重（Bug 2 修复）──
+            # 日期模式不翻倍（count 已足够大 / bilibili 不限页）。
+            _overfetch_mult = _OVERFETCH_MULT if platform not in _OVERFETCH_SKIP_PLATFORMS else 1
+            _fetch_count = count * _overfetch_mult if not _date_mode else count
+
             try:
                 results = _search_with_timeout(
-                    searcher, kw_text, _kw_sort, count,
+                    searcher, kw_text, _kw_sort, _fetch_count,
                     date_from=search_date_from, date_to=search_date_to,
                 )
             except Exception:
@@ -1207,8 +1220,16 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
             # 失败项仍保留在 hot_results/date_results 中供 UI 展示为错误。
             kr.new_items = [r for r in results if r.url and not r.error and _dedup_key(r) not in prev_keys]
 
-            harvest.total_fetched += len(results)
-            harvest.total_new += len(kr.new_items)
+            # 口径 B: candidates_fetched 记录原始抓取量（含 overfetch）；
+            # total_fetched/total_new 仍按契约量 count 封顶，语义不变。
+            kr.candidates_fetched = len(results)
+            if _date_mode:
+                harvest.total_fetched += len(results)
+                harvest.total_new += len(kr.new_items)
+            else:
+                harvest.total_fetched += min(count, len(results))
+                harvest.total_new += min(count, len(kr.new_items))
+            harvest.candidates_fetched += kr.candidates_fetched
 
             # Archive single result set
             _archive_results(results, date_str, kw_id, platform, _kw_sort)
@@ -1226,6 +1247,7 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
         total_fetched=harvest.total_fetched,
         total_new=harvest.total_new,
         dedup_rate=harvest.dedup_rate,
+        candidates_fetched=harvest.candidates_fetched,
     )
 
     # 持久化监测统计，供日报读取真实数据（区分「无监测数据」与「结果为 0」）
