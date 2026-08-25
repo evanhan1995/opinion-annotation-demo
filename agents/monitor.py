@@ -905,30 +905,90 @@ def _dedup_key(r) -> str:
     )
 
 
-def _load_previous_keys(keyword_id: str, platform: str) -> set:
-    """Load ALL previously archived dedup keys across all dates for cross-day dedup."""
+_ALIASES_PATH = PROJECT_ROOT / "monitor_keywords_aliases.json"
+
+
+def _load_aliases() -> dict:
+    """读取别名映射 {关键词文本: [曾用过的所有 id]}。文件缺失/损坏时返回空。"""
+    try:
+        if not _ALIASES_PATH.exists():
+            return {}
+        data = json.loads(_ALIASES_PATH.read_text(encoding="utf-8"))
+        return data.get("aliases", {}) or {}
+    except Exception as e:
+        _log.warning("读取别名映射失败: %s", e)
+        return {}
+
+
+def _resolve_alias_ids(keyword_text: str) -> list[str]:
+    """返回某关键词文本曾用过的所有 id（含别名），用于跨 id 历史去重。"""
+    return list(_load_aliases().get(keyword_text, []))
+
+
+def _save_aliases(aliases: dict) -> None:
+    """写入别名映射（ensure_ascii=False 避免中文变 \\uXXXX）。"""
+    try:
+        _ALIASES_PATH.write_text(
+            json.dumps({"aliases": aliases}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        _log.warning("写入别名映射失败: %s", e)
+
+
+def _validate_aliases(keywords: list[dict]) -> None:
+    """加载时校验：检测手改 config 导致的关键词 id 是否已脱离别名映射。
+
+    仅在别名映射非空时生效；发现脱离即 WARNING，不自动修复（id 复用歧义，误判风险高）。
+    """
+    aliases = _load_aliases()
+    if not aliases:
+        return
+    for kw in keywords:
+        text = kw.get("keyword", "")
+        kw_id = kw.get("id", "")
+        if text in aliases and kw_id not in aliases[text]:
+            _log.warning(
+                "别名映射告警：关键词「%s」当前 id=%s 不在别名映射 %s 中，"
+                "疑似手改 monitor_keywords.json 导致 id 变更，历史归档可能失联。"
+                "请将 %s 加入 monitor_keywords_aliases.json。",
+                text, kw_id, aliases[text], kw_id,
+            )
+
+
+def _load_previous_keys(keyword_id: str, keyword_text: str, platform: str) -> set:
+    """Load ALL previously archived dedup keys across all dates for cross-day dedup.
+
+    支持别名映射：关键词文本历史上用过多个 id（如豆包 kw001/kw002）时，
+    一并加载这些 id 的归档，避免 id 变更导致历史归档失联、已标记内容被误判为新增。
+    """
     archive_root = RAW_DIR / "monitor"
     if not archive_root.exists():
         return set()
+    id_list = [keyword_id]
+    for _id in _resolve_alias_ids(keyword_text):
+        if _id not in id_list:
+            id_list.append(_id)
     keys = set()
-    for date_dir in archive_root.iterdir():
-        if not date_dir.is_dir():
-            continue
-        for f in date_dir.glob(f"{keyword_id}_{platform}_*.json"):
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("dedup_key"):
-                        keys.add(item["dedup_key"])
-                    elif platform == "wechat" and item.get("title"):
-                        # 旧归档无 dedup_key，现场用 title+author 计算，与新格式一致
-                        keys.add(f"{_normalize_dedup_title(item['title'])}|{(item.get('author') or '').strip()}")
-                    elif item.get("url"):
-                        keys.add(item["url"])
-            except Exception as e:
-                _log.debug("读取历史归档去重数据失败: %s", e)
+    for _id in id_list:
+        for date_dir in archive_root.iterdir():
+            if not date_dir.is_dir():
+                continue
+            for f in date_dir.glob(f"{_id}_{platform}_*.json"):
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    for item in data:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("dedup_key"):
+                            keys.add(item["dedup_key"])
+                        elif platform == "wechat" and item.get("title"):
+                            # 旧归档无 dedup_key，现场用 title+author 计算，与新格式一致
+                            keys.add(f"{_normalize_dedup_title(item['title'])}|{(item.get('author') or '').strip()}")
+                        elif item.get("url"):
+                            keys.add(item["url"])
+                except Exception as e:
+                    _log.debug("读取历史归档去重数据失败: %s", e)
     return keys
 
 
@@ -1034,6 +1094,7 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
     date_str = datetime.now().strftime("%Y-%m-%d")
     started = datetime.now().isoformat()
     keywords = load_keywords()
+    _validate_aliases(keywords)
     harvest = MonitorHarvest(job_id=job_id, started_at=started, finished_at="")
 
     defaults = json.loads(
@@ -1141,7 +1202,7 @@ def execute_job(progress_callback=None, sort_preference: str = "default",
             else:
                 kr.hot_results = results
 
-            prev_keys = _load_previous_keys(kw_id, platform)
+            prev_keys = _load_previous_keys(kw_id, kw_text, platform)
             # 过滤掉失败项（url 为空或 error 非空），避免把「抓取失败」当新内容抓取；
             # 失败项仍保留在 hot_results/date_results 中供 UI 展示为错误。
             kr.new_items = [r for r in results if r.url and not r.error and _dedup_key(r) not in prev_keys]

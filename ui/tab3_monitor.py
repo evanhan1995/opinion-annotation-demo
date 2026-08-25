@@ -147,8 +147,16 @@ def render_tab3():
         if st.button("添加", key="monitor_add_kw", use_container_width=True):
             if new_kw.strip():
                 max_id = max((int(kw["id"].replace("kw", "")) for kw in all_keywords if kw["id"].startswith("kw")), default=0)
+                new_id = f"kw{max_id + 1:03d}"
+                # 继承别名：若该关键词文本已有历史 id，把新 id 追加进别名映射
+                from agents.monitor import _load_aliases, _save_aliases
+                _aliases = _load_aliases()
+                _txt = new_kw.strip()
+                if _txt in _aliases and new_id not in _aliases[_txt]:
+                    _aliases[_txt].append(new_id)
+                    _save_aliases(_aliases)
                 all_keywords.append({
-                    "id": f"kw{max_id + 1:03d}",
+                    "id": new_id,
                     "keyword": new_kw.strip(),
                     "platforms": new_platforms if new_platforms else list(platform_labels.keys()),
                     "result_count": result_count,

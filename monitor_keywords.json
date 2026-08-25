@@ -1,13 +1,13 @@
 {
   "keywords": [
     {
-      "id": "kw002",
+      "id": "kw001",
       "keyword": "豆包",
       "platforms": [
         "wechat"
       ],
       "result_count": 5,
-      "fetch_mode": "default",
+      "fetch_mode": "date",
       "active": true,
       "notes": ""
     }
