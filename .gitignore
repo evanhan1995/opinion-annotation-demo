@@ -51,6 +51,7 @@ config/model_degradation.json
 node_modules/
 
 # Cache / temp
+temp/
 engine/.xhs_dl_cache/
 *.tmp.*
 *.png
