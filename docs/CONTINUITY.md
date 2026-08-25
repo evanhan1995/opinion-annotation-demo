@@ -202,11 +202,15 @@ app.py 标注按钮点击
 6. **scraper 平台映射表漂移**：三张独立映射表覆盖不一致——`engine/scraper.py::_detect_platform`（URL→中文，11 标签，含 X/Reddit/Instagram/TikTok/通用网页）、`agents/scraper.py::_PLATFORM_LABEL_TO_KEY`（中文→短键，12 项）、`engine/ingestor.py::PLATFORM_SUBDIR`（中文/短键→子目录，仅 6 平台）。`PLATFORM_SUBDIR` 缺 X/Reddit/Instagram/TikTok → 这些平台落扁平目录（`_get_case_dir` 返回 CASES_DIR），未来接入后可能重蹈 case_id 撞号。另 `_detect_platform` 的 instagram/tiktok 分支重复（line 135-138 vs 147-150，后者死代码）。
 7. **联网测试污染真实 wiki/cases/**：`test_orchestrator.py` 的 `run_active_monitor` 在全量 pytest 时会真实写入生产 `wiki/cases/` 目录，且 curator 兜底路径的 `get_next_case_id` 会复用低编号导致撞号覆盖真实 case。本次（2026-08-23）已发生一次真实数据覆盖事故（5 个真实 case 被覆盖），已用备份 `temp/cases_backup_20260823/` 完整恢复。**根因未修**：这些联网测试应该像 `test_case_id.py`/`test_core.py` 一样 monkeypatch 隔离 `CASES_DIR` 等路径，而不是直接操作真实目录。**优先级：高**（已有真实事故记录，不是理论风险）。
 8. **待验证：非微信平台（抖音/小红书等）搜索结果 URL 是否也存在轮换 token（同类稳定性风险）**：本次修复只验证并修复了微信平台（搜狗跳转链接 token 轮换导致去重失效），其余平台假设 URL 稳定，未做同等抽样验证。验证方法可复用本次的抽样脚本思路：同一 keyword_id 跨天归档，按 URL 分组 vs 按 title+author 分组对比，看是否有「URL 分组数明显多于 title+author 分组数」的失效迹象。
+9. **既存隐患待排查：微信 count=15 搜索推算耗时已超 60s `_SEARCH_TIMEOUT`**：实测 `search_wechat_articles("豆包", count=5)` = 28.4s（单条均摊 ≈5.7s，含 `_resolve_sogou_url` 文章解析），线性外推 count=15 ≈98s、count=30 ≈190s，均已超 `agents/monitor.py::_SEARCH_TIMEOUT=60`（超时即返回 `[]`）。这与 08-24 归档有 15 条存在张力，可能依赖当天网络快慢，需单独排查确认：现状是否实际接近/触发超时、影响范围（是否已导致部分微信搜索结果被静默丢弃）。独立于本次「别名映射」与「overfetch」两修复。
 
 ### 新注意事项（追加到上文旧注意事项）
 - **微信公众号链接 = 搜狗临时跳转凭据**：会话外/过期后不可打开（sn 签名不暴露，缺 sn 即「参数错误」）。存库的公众号 url 无法作为长期可访问入口——展示层需弱化（tab4 已做，见待办 1），不要试图「修复」链接本身（微信反爬硬约束，见旧注意事项 10）。
 - **monitor_keywords.json 易被误清空**：反复出现 keywords=[]；勿在测试/脚本中写它；改它前先确认是真实配置变更。
 - **LLM 降级链现状**：Analyst/Curator/DailyReport 失败均有降级兜底 + degraded 标记 + config/model_degradation.json 持久化（gitignored，pytest 会产生该文件，跑完可删）。
+- **keyword_id 会变 + 复用（Bug 1 别名映射）**：`豆包` 从 kw002→kw001（手工配置改动，非 UI 删增），去重归档按 keyword_id 分片 → 跨 id 历史不可见，「已标记」内容重现为「新增」。已修：`monitor_keywords_aliases.json`（keyword 文本 → 曾用 id 列表）+ `_validate_aliases` 加载时兜底校验（缺当前 id 只 WARNING 不自动改）。
+- **overfetch「先截断后去重」（Bug 2 修复）**：搜索结果先截到 count(10/15) 再去重 → 已见内容挤占名额，rank 15 以下的新内容漏抓。已修：4a overfetch——先抓 count×2 再去重（`_OVERFETCH_MULT=2`，`_OVERFETCH_SKIP_PLATFORMS={"wechat"}` 不翻倍，日期模式不翻倍）。口径 B：`total_fetched` 保持契约量 count 不变（`min(count, len(results))`），新增 `candidates_fetched` 记录原始抓取量（含翻倍）；`date_results/hot_results` 保留完整候选池供 UI「已标记」展示。
+- **overfetch 未来阈值**：归档翻倍后 `_load_previous_keys` 单 job 约 60ms（豆包 4 平台），暂无需保留窗口；若归档 >5000 文件或多 MB 再评估。UI「已标记」随完整候选池变多（15→最多30），暂无需上限；若 mult=3× 或 count=50 再评估。
 
 ---
 
