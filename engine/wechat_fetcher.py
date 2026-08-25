@@ -25,6 +25,7 @@ import engine._compat
 
 ENGINE_DIR = Path(__file__).resolve().parent
 from engine.browser_pool import launch_context, BROWSER_ARGS
+from engine.ratelimit import get_limiter
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -121,6 +122,7 @@ def search_wechat_articles(keyword: str, count: int = 20, sort_type: str = "hot"
                 f"https://weixin.sogou.com/weixin?type=2"
                 f"&query={urllib.parse.quote(keyword)}&page={page_num}"
             )
+            get_limiter("wechat").acquire()
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(4000)
 
@@ -230,6 +232,7 @@ def _resolve_sogou_url(search_page, sogou_url: str) -> tuple[str, str]:
     try:
         page = ctx.new_page()
         search_url = search_page.url
+        get_limiter("wechat").acquire()
         page.goto(sogou_url, timeout=15000, wait_until="domcontentloaded",
                   referer=search_url)
 
